@@ -266,6 +266,7 @@ pub fn journal_editor(
                         &cfg.personal_experience,
                         &cfg.personal_hobbies,
                         &cfg.personal_recent_status,
+                        current_prompt.as_deref(),
                     );
                     match result {
                         Some(text) => {
