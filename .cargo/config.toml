@@ -1,0 +1,5 @@
+[target.armv7-unknown-linux-musleabihf]
+linker = "/home/ywz/pjournal-rs/zig-lld.sh"
+
+[env]
+CC_armv7_unknown_linux_musleabihf = "/home/ywz/pjournal-rs/zig-cc.sh"

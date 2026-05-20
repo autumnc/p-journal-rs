@@ -52,6 +52,8 @@ pub struct Config {
     pub personal_experience: String,
     #[serde(default)]
     pub personal_hobbies: String,
+    #[serde(default)]
+    pub personal_recent_status: String,
 }
 
 pub fn load_config() -> Config {

@@ -77,6 +77,11 @@ static GROUPS: &[GroupDef] = &[
                 label: "爱好",
                 masked: false,
             },
+            FieldDef {
+                key: "personal_recent_status",
+                label: "最近状态",
+                masked: false,
+            },
         ],
     },
 ];
@@ -150,21 +155,40 @@ pub fn settings_screen(
                 }
                 KeyCode::Backspace => {
                     if cursor_pos > 0 {
-                        cursor_pos -= 1;
-                        edit_buf.remove(cursor_pos);
+                        let prev = edit_buf
+                            .char_indices()
+                            .rev()
+                            .find(|(i, _)| *i < cursor_pos)
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        edit_buf.remove(prev);
+                        cursor_pos = prev;
                     }
                 }
                 KeyCode::Left => {
-                    cursor_pos = cursor_pos.saturating_sub(1);
+                    if cursor_pos > 0 {
+                        cursor_pos = edit_buf
+                            .char_indices()
+                            .rev()
+                            .find(|(i, _)| *i < cursor_pos)
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                    }
                 }
                 KeyCode::Right => {
-                    cursor_pos = (cursor_pos + 1).min(edit_buf.len());
+                    if cursor_pos < edit_buf.len() {
+                        cursor_pos = edit_buf
+                            .char_indices()
+                            .find(|(i, _)| *i > cursor_pos)
+                            .map(|(i, _)| i)
+                            .unwrap_or(edit_buf.len());
+                    }
                 }
                 KeyCode::Home => cursor_pos = 0,
                 KeyCode::End => cursor_pos = edit_buf.len(),
                 KeyCode::Char(c) => {
                     edit_buf.insert(cursor_pos, c);
-                    cursor_pos += 1;
+                    cursor_pos += c.len_utf8();
                 }
                 _ => {}
             }
@@ -226,6 +250,7 @@ fn get_config_value(config: &Config, key: &str) -> String {
         "webdav_password" => config.webdav_password.clone(),
         "personal_experience" => config.personal_experience.clone(),
         "personal_hobbies" => config.personal_hobbies.clone(),
+        "personal_recent_status" => config.personal_recent_status.clone(),
         _ => String::new(),
     }
 }
@@ -241,6 +266,7 @@ fn clear_field(row: &FieldRow, config: &mut Config) {
         "webdav_password" => config.webdav_password.clear(),
         "personal_experience" => config.personal_experience.clear(),
         "personal_hobbies" => config.personal_hobbies.clear(),
+        "personal_recent_status" => config.personal_recent_status.clear(),
         _ => {}
     }
     save_config(config).ok();
@@ -257,6 +283,7 @@ fn commit_edit(row: &FieldRow, value: &str, config: &mut Config) {
         "webdav_password" => config.webdav_password = value.to_string(),
         "personal_experience" => config.personal_experience = value.to_string(),
         "personal_hobbies" => config.personal_hobbies = value.to_string(),
+        "personal_recent_status" => config.personal_recent_status = value.to_string(),
         _ => {}
     }
     // Clear Flomo token if credentials changed
@@ -310,16 +337,18 @@ fn draw_settings(
 
             let display_value = if is_sel && editing {
                 let masked_display = if field.masked && !edit_buf.is_empty() {
-                    "*".repeat(edit_buf.len())
+                    "*".repeat(edit_buf.chars().count())
                 } else {
                     edit_buf.to_string()
                 };
                 format!("{}{}", masked_display, cursor_pos as u8)
             } else if field.masked && !value.is_empty() {
-                "*".repeat(value.len().min(20))
+                "*".repeat(value.chars().count().min(20))
             } else if !value.is_empty() {
-                if value.len() > 40 {
-                    format!("{}...", &value[..40])
+                let char_count = value.chars().count();
+                if char_count > 40 {
+                    let truncated: String = value.chars().take(40).collect();
+                    format!("{}...", truncated)
                 } else {
                     value.to_string()
                 }

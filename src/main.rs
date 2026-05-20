@@ -66,8 +66,8 @@ fn main() -> io::Result<()> {
                     _ => None,
                 };
 
-                let text = match journal_editor(&mut terminal, prompt_text.clone())? {
-                    EditorResult::Commit(text) => text,
+                let (text, active_prompt) = match journal_editor(&mut terminal, prompt_text.clone())? {
+                    EditorResult::Commit(text, prompt) => (text, prompt),
                     EditorResult::Cancel => continue,
                 };
 
@@ -75,7 +75,7 @@ fn main() -> io::Result<()> {
                     continue;
                 }
 
-                let full_text = if let Some(ref pt) = prompt_text {
+                let full_text = if let Some(ref pt) = active_prompt {
                     format!("提示词: {}\n\n{}", pt, text)
                 } else {
                     format!("自由写作\n\n{}", text)

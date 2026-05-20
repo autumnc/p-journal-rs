@@ -14,7 +14,7 @@ use ratatui::{
 use std::io;
 
 pub enum EditorResult {
-    Commit(String),
+    Commit(String, Option<String>),
     Cancel,
 }
 
@@ -234,7 +234,7 @@ pub fn journal_editor(
                 if text.is_empty() {
                     return Ok(EditorResult::Cancel);
                 }
-                return Ok(EditorResult::Commit(text));
+                return Ok(EditorResult::Commit(text, current_prompt.clone()));
             }
             KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let text = lines.join("\n").trim().to_string();
@@ -265,6 +265,7 @@ pub fn journal_editor(
                         &cfg.deepseek_api_key,
                         &cfg.personal_experience,
                         &cfg.personal_hobbies,
+                        &cfg.personal_recent_status,
                     );
                     match result {
                         Some(text) => {
@@ -288,7 +289,7 @@ pub fn journal_editor(
                 let mut cfg = load_config();
                 let (_, msg) = send_to_flomo(&text, &mut cfg);
                 show_message(terminal, &msg, 2)?;
-                return Ok(EditorResult::Commit(text));
+                return Ok(EditorResult::Commit(text, current_prompt.clone()));
             }
 
             // Printable chars (including CJK)
