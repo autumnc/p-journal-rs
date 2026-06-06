@@ -54,6 +54,8 @@ pub struct Config {
     pub personal_hobbies: String,
     #[serde(default)]
     pub personal_recent_status: String,
+    #[serde(default)]
+    pub markdown_enabled: bool,
 }
 
 pub fn load_config() -> Config {

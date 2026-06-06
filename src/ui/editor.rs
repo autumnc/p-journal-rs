@@ -8,9 +8,11 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::Paragraph,
     Frame,
 };
+use ratatui_markdown::{RichTextTheme, ThemeConfig};
 use std::io;
 
 pub enum EditorResult {
@@ -30,6 +32,7 @@ pub fn journal_editor(
     let mut current_prompt = prompt_text;
 
     let accent = Style::default().fg(Color::Yellow);
+    let md_theme = markdown_theme();
 
     // Compute prompt display lines
     let get_prompt_info = |prompt: &Option<String>, term_w: usize| -> (Vec<String>, usize) {
@@ -71,6 +74,8 @@ pub fn journal_editor(
         scroll_y = scroll_y.min(vrows.len().saturating_sub(text_h).max(0));
 
         // Render
+        let cfg = load_config();
+        let md_enabled = cfg.markdown_enabled;
         terminal.draw(|f| {
             render_editor(
                 f,
@@ -85,6 +90,8 @@ pub fn journal_editor(
                 &current_prompt,
                 cy,
                 &accent,
+                md_enabled,
+                &md_theme,
             );
         })?;
 
@@ -409,6 +416,8 @@ fn render_editor(
     prompt_text: &Option<String>,
     cy: usize,
     accent: &Style,
+    md_enabled: bool,
+    md_theme: &ThemeConfig,
 ) {
     let area = f.area();
     let w = area.width as usize;
@@ -416,7 +425,7 @@ fn render_editor(
     // Draw prompt area
     let mut draw_row = 0u16;
     if prompt_text.is_some() {
-        draw_row += 1; // blank line
+        draw_row += 1;
         for pl in prompt_lines {
             f.render_widget(
                 Paragraph::new(format!("   {}", pl)).style(accent.add_modifier(Modifier::DIM)),
@@ -424,8 +433,7 @@ fn render_editor(
             );
             draw_row += 1;
         }
-        draw_row += 1; // blank line
-        // Separator
+        draw_row += 1;
         let sep = "─".repeat(w.saturating_sub(2));
         f.render_widget(
             Paragraph::new(sep).style(Style::default().add_modifier(Modifier::DIM)),
@@ -442,10 +450,25 @@ fn render_editor(
         }
         let vr = &vrows[vi];
         let segment = &lines[vr.logical_line][vr.start_byte..vr.end_byte];
-        f.render_widget(
-            Paragraph::new(segment.to_string()),
-            Rect::new(area.x, area.y + draw_row + i as u16, area.width, 1),
-        );
+
+        if md_enabled {
+            let is_first = vr.start_byte == 0;
+            let role = if is_first {
+                detect_md_role(&lines[vr.logical_line])
+            } else {
+                MdRole::Continuation
+            };
+            let spans = highlight_inline(segment, role, md_theme);
+            f.render_widget(
+                Paragraph::new(Line::from(spans)),
+                Rect::new(area.x, area.y + draw_row + i as u16, area.width, 1),
+            );
+        } else {
+            f.render_widget(
+                Paragraph::new(segment.to_string()),
+                Rect::new(area.x, area.y + draw_row + i as u16, area.width, 1),
+            );
+        }
     }
 
     // Cursor
@@ -480,11 +503,296 @@ fn render_editor(
     } else {
         "自由写作"
     };
-    let mode_label = format!("{}  ·  {}", date_display, mode);
+    let md_label = if md_enabled { " MD " } else { "" };
+    let mode_label = format!("{}  ·  {}{}", date_display, mode, md_label);
     let line_info = format!("第{}行/共{}行  {}字 ", cy + 1, lines.len(), wc);
     let status = format_status_bar(&mode_label, &line_info, w);
     f.render_widget(
         Paragraph::new(status).style(Style::default().add_modifier(Modifier::REVERSED)),
         Rect::new(area.x, area.y + area.height - 1, area.width, 1),
     );
+}
+
+// ── Markdown highlighting ──
+
+fn markdown_theme() -> ThemeConfig {
+    ThemeConfig::default()
+        .with_text_color(Color::Rgb(220, 220, 220))
+        .with_muted_text_color(Color::Rgb(100, 100, 100))
+        .with_primary_color(Color::Rgb(100, 180, 255))
+        .with_secondary_color(Color::Rgb(180, 140, 255))
+        .with_info_color(Color::Rgb(120, 180, 220))
+        .with_accent_yellow(Color::Rgb(255, 200, 50))
+        .with_border_color(Color::Rgb(80, 80, 80))
+        .with_focused_border_color(Color::Rgb(140, 140, 140))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum MdRole {
+    Heading1,
+    Heading2,
+    Heading3,
+    ListItem,
+    Blockquote,
+    CodeFence,
+    Continuation,
+    Normal,
+}
+
+fn detect_md_role(line: &str) -> MdRole {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("```") {
+        return MdRole::CodeFence;
+    }
+    if trimmed.starts_with("### ") {
+        return MdRole::Heading3;
+    }
+    if trimmed.starts_with("## ") {
+        return MdRole::Heading2;
+    }
+    if trimmed.starts_with("# ") {
+        return MdRole::Heading1;
+    }
+    if trimmed.starts_with('>') {
+        return MdRole::Blockquote;
+    }
+    if let Some(c) = trimmed.chars().next() {
+        if (c == '-' || c == '*' || c == '+')
+            && trimmed.chars().nth(1) == Some(' ')
+        {
+            return MdRole::ListItem;
+        }
+    }
+    MdRole::Normal
+}
+
+fn role_base_style(role: MdRole, theme: &ThemeConfig) -> Style {
+    let base = Style::default().fg(theme.get_text_color());
+    match role {
+        MdRole::Heading1 => base.add_modifier(Modifier::BOLD).fg(theme.get_primary_color()),
+        MdRole::Heading2 => base.add_modifier(Modifier::BOLD).fg(theme.get_secondary_color()),
+        MdRole::Heading3 => base.add_modifier(Modifier::BOLD).fg(theme.get_info_color()),
+        MdRole::ListItem => base.fg(theme.get_text_color()),
+        MdRole::Blockquote => base.add_modifier(Modifier::ITALIC).fg(theme.get_muted_text_color()),
+        MdRole::CodeFence => base.fg(theme.get_accent_yellow()),
+        MdRole::Continuation => base,
+        MdRole::Normal => base,
+    }
+}
+
+fn highlight_inline(text: &str, role: MdRole, theme: &ThemeConfig) -> Vec<Span<'static>> {
+    let base = role_base_style(role, theme);
+    let muted = Style::default()
+        .fg(theme.get_muted_text_color())
+        .add_modifier(Modifier::DIM);
+    let code_style = Style::default().fg(theme.get_accent_yellow());
+    let link_style = Style::default()
+        .fg(theme.get_primary_color())
+        .add_modifier(Modifier::UNDERLINED);
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    let mut plain_start = 0usize;
+
+    macro_rules! flush_plain {
+        ($end:expr) => {
+            if plain_start < $end {
+                let s: String = chars[plain_start..$end].iter().collect();
+                if !s.is_empty() {
+                    spans.push(Span::styled(s, base));
+                }
+            }
+        };
+    }
+
+    while i < len {
+        // *** bold italic ***
+        if chars[i] == '*' && i + 2 < len && chars[i + 1] == '*' && chars[i + 2] == '*' {
+            let mut end = i + 3;
+            let mut found = false;
+            while end + 2 < len {
+                if chars[end] == '*' && chars[end + 1] == '*' && chars[end + 2] == '*' {
+                    flush_plain!(i);
+                    spans.push(Span::styled("***", muted));
+                    let inner: String = chars[i + 3..end].iter().collect();
+                    spans.push(Span::styled(
+                        inner,
+                        base.add_modifier(Modifier::BOLD | Modifier::ITALIC),
+                    ));
+                    spans.push(Span::styled("***", muted));
+                    i = end + 3;
+                    plain_start = i;
+                    found = true;
+                    break;
+                }
+                end += 1;
+            }
+            if !found {
+                i += 3;
+            }
+            continue;
+        }
+
+        // ** bold ** or __ bold __
+        if ((chars[i] == '*' && i + 1 < len && chars[i + 1] == '*')
+            || (chars[i] == '_' && i + 1 < len && chars[i + 1] == '_'))
+            && !(i + 2 < len && chars[i + 2] == chars[i])
+        {
+            let delim = chars[i];
+            let marker: String = [delim, delim].iter().collect();
+            let mut end = i + 2;
+            let mut found = false;
+            while end + 1 < len {
+                if chars[end] == delim && chars[end + 1] == delim {
+                    flush_plain!(i);
+                    spans.push(Span::styled(marker.clone(), muted));
+                    let inner: String = chars[i + 2..end].iter().collect();
+                    spans.push(Span::styled(inner, base.add_modifier(Modifier::BOLD)));
+                    spans.push(Span::styled(marker.clone(), muted));
+                    i = end + 2;
+                    plain_start = i;
+                    found = true;
+                    break;
+                }
+                end += 1;
+            }
+            if !found {
+                i += 2;
+            }
+            continue;
+        }
+
+        // * italic * or _ italic _ (single, not double/triple)
+        if chars[i] == '*' || chars[i] == '_' {
+            // Not part of ** or ***
+            if i + 1 < len && chars[i + 1] == chars[i] {
+                i += 1;
+                continue;
+            }
+            let delim = chars[i];
+            let mut end = i + 1;
+            let mut found = false;
+            while end < len {
+                if chars[end] == delim
+                    && !(end + 1 < len && chars[end + 1] == delim)
+                {
+                    flush_plain!(i);
+                    spans.push(Span::styled(
+                        delim.to_string(),
+                        muted,
+                    ));
+                    let inner: String = chars[i + 1..end].iter().collect();
+                    spans.push(Span::styled(inner, base.add_modifier(Modifier::ITALIC)));
+                    spans.push(Span::styled(
+                        delim.to_string(),
+                        muted,
+                    ));
+                    i = end + 1;
+                    plain_start = i;
+                    found = true;
+                    break;
+                }
+                end += 1;
+            }
+            if !found {
+                i += 1;
+            }
+            continue;
+        }
+
+        // ~~ strikethrough ~~
+        if chars[i] == '~' && i + 1 < len && chars[i + 1] == '~' {
+            let mut end = i + 2;
+            let mut found = false;
+            while end + 1 < len {
+                if chars[end] == '~' && chars[end + 1] == '~' {
+                    flush_plain!(i);
+                    spans.push(Span::styled("~~", muted));
+                    let inner: String = chars[i + 2..end].iter().collect();
+                    spans.push(Span::styled(
+                        inner,
+                        base.add_modifier(Modifier::CROSSED_OUT),
+                    ));
+                    spans.push(Span::styled("~~", muted));
+                    i = end + 2;
+                    plain_start = i;
+                    found = true;
+                    break;
+                }
+                end += 1;
+            }
+            if !found {
+                i += 2;
+            }
+            continue;
+        }
+
+        // ` inline code `
+        if chars[i] == '`' {
+            let mut end = i + 1;
+            let mut found = false;
+            while end < len {
+                if chars[end] == '`' {
+                    flush_plain!(i);
+                    spans.push(Span::styled("`", muted));
+                    let inner: String = chars[i + 1..end].iter().collect();
+                    spans.push(Span::styled(inner, code_style));
+                    spans.push(Span::styled("`", muted));
+                    i = end + 1;
+                    plain_start = i;
+                    found = true;
+                    break;
+                }
+                end += 1;
+            }
+            if !found {
+                i += 1;
+            }
+            continue;
+        }
+
+        // [link text](url)
+        if chars[i] == '[' {
+            let mut bracket_end = i + 1;
+            let mut found_link = false;
+            while bracket_end < len {
+                if chars[bracket_end] == ']'
+                    && bracket_end + 1 < len
+                    && chars[bracket_end + 1] == '('
+                {
+                    let mut paren_end = bracket_end + 2;
+                    while paren_end < len {
+                        if chars[paren_end] == ')' {
+                            flush_plain!(i);
+                            spans.push(Span::styled("[", muted));
+                            let link_text: String = chars[i + 1..bracket_end].iter().collect();
+                            spans.push(Span::styled(link_text, link_style));
+                            spans.push(Span::styled("](", muted));
+                            let url_text: String =
+                                chars[bracket_end + 2..paren_end].iter().collect();
+                            spans.push(Span::styled(url_text, muted));
+                            spans.push(Span::styled(")", muted));
+                            i = paren_end + 1;
+                            plain_start = i;
+                            found_link = true;
+                            break;
+                        }
+                        paren_end += 1;
+                    }
+                    break;
+                }
+                bracket_end += 1;
+            }
+            if found_link {
+                continue;
+            }
+        }
+
+        i += 1;
+    }
+
+    flush_plain!(len);
+    spans
 }

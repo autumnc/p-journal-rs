@@ -9,10 +9,17 @@ use ratatui::{
 };
 use std::io;
 
+#[derive(Clone, Copy, PartialEq)]
+enum FieldKind {
+    Text,
+    Bool,
+}
+
 struct FieldDef {
     key: &'static str,
     label: &'static str,
     masked: bool,
+    kind: FieldKind,
 }
 
 struct GroupDef {
@@ -22,11 +29,21 @@ struct GroupDef {
 
 static GROUPS: &[GroupDef] = &[
     GroupDef {
+        title: "── 显示 ──",
+        fields: &[FieldDef {
+            key: "markdown_enabled",
+            label: "Markdown 语法高亮",
+            masked: false,
+            kind: FieldKind::Bool,
+        }],
+    },
+    GroupDef {
         title: "── AI ──",
         fields: &[FieldDef {
             key: "deepseek_api_key",
             label: "Deepseek API Key",
             masked: false,
+            kind: FieldKind::Text,
         }],
     },
     GroupDef {
@@ -36,11 +53,13 @@ static GROUPS: &[GroupDef] = &[
                 key: "flomo_email",
                 label: "邮箱",
                 masked: false,
+                kind: FieldKind::Text,
             },
             FieldDef {
                 key: "flomo_password",
                 label: "密码",
                 masked: true,
+                kind: FieldKind::Text,
             },
         ],
     },
@@ -51,16 +70,19 @@ static GROUPS: &[GroupDef] = &[
                 key: "webdav_url",
                 label: "服务器地址",
                 masked: false,
+                kind: FieldKind::Text,
             },
             FieldDef {
                 key: "webdav_username",
                 label: "用户名",
                 masked: false,
+                kind: FieldKind::Text,
             },
             FieldDef {
                 key: "webdav_password",
                 label: "密码",
                 masked: true,
+                kind: FieldKind::Text,
             },
         ],
     },
@@ -71,16 +93,19 @@ static GROUPS: &[GroupDef] = &[
                 key: "personal_experience",
                 label: "经历",
                 masked: false,
+                kind: FieldKind::Text,
             },
             FieldDef {
                 key: "personal_hobbies",
                 label: "爱好",
                 masked: false,
+                kind: FieldKind::Text,
             },
             FieldDef {
                 key: "personal_recent_status",
                 label: "最近状态",
                 masked: false,
+                kind: FieldKind::Text,
             },
         ],
     },
@@ -226,9 +251,14 @@ pub fn settings_screen(
             }
             KeyCode::Enter => {
                 if !rows.is_empty() && !rows[sel_idx].is_group {
-                    edit_buf = get_config_value(&config, field_key(&rows[sel_idx]));
-                    cursor_pos = edit_buf.len();
-                    editing = true;
+                    let field = field_def(&rows[sel_idx]);
+                    if field.kind == FieldKind::Bool {
+                        toggle_bool_field(&rows[sel_idx], &mut config);
+                    } else {
+                        edit_buf = get_config_value(&config, field_key(&rows[sel_idx]));
+                        cursor_pos = edit_buf.len();
+                        editing = true;
+                    }
                 }
             }
             _ => {}
@@ -238,6 +268,18 @@ pub fn settings_screen(
 
 fn field_key(row: &FieldRow) -> &str {
     GROUPS[row.group_idx].fields[row.field_idx].key
+}
+
+fn field_def(row: &FieldRow) -> &FieldDef {
+    &GROUPS[row.group_idx].fields[row.field_idx]
+}
+
+fn toggle_bool_field(row: &FieldRow, config: &mut Config) {
+    let key = field_key(row);
+    if key == "markdown_enabled" {
+        config.markdown_enabled = !config.markdown_enabled;
+    }
+    save_config(config).ok();
 }
 
 fn get_config_value(config: &Config, key: &str) -> String {
@@ -252,6 +294,13 @@ fn get_config_value(config: &Config, key: &str) -> String {
         "personal_hobbies" => config.personal_hobbies.clone(),
         "personal_recent_status" => config.personal_recent_status.clone(),
         _ => String::new(),
+    }
+}
+
+fn get_config_bool(config: &Config, key: &str) -> bool {
+    match key {
+        "markdown_enabled" => config.markdown_enabled,
+        _ => false,
     }
 }
 
@@ -342,6 +391,13 @@ fn draw_settings(
                     edit_buf.to_string()
                 };
                 format!("{}{}", masked_display, cursor_pos as u8)
+            } else if field.kind == FieldKind::Bool {
+                let val = get_config_bool(config, field.key);
+                if val {
+                    "✓ 开".to_string()
+                } else {
+                    "✗ 关".to_string()
+                }
             } else if field.masked && !value.is_empty() {
                 "*".repeat(value.chars().count().min(20))
             } else if !value.is_empty() {
@@ -390,6 +446,8 @@ fn draw_settings(
     // Help bar
     let help = if editing {
         " [回车] 确认  [Esc] 取消"
+    } else if !rows.is_empty() && !rows[sel_idx].is_group && field_def(&rows[sel_idx]).kind == FieldKind::Bool {
+        " [回车] 切换  [q] 返回"
     } else {
         " [回车] 编辑  [d] 清空  [q] 返回"
     };
