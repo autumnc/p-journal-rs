@@ -1,13 +1,14 @@
-use crate::config::{file_ext, load_config};
+use crate::config::{load_config, strip_journal_ext};
 use crate::flomo::send_to_flomo;
 use crate::journal::{extract_body_from_entry, read_entry};
 use crate::ui::browser::{format_status_bar, show_message};
+use crate::ui::editor::{detect_md_role, highlight_inline, markdown_theme, MdRole};
 use crate::ui::theme::{self, fill_background};
 use chrono::NaiveDateTime;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
+    text::{Line, Span},
     widgets::Paragraph,
 };
 use std::io;
@@ -21,31 +22,32 @@ pub fn entry_viewer(
         None => return Ok(()),
     };
 
-    let date_part = filename.trim_end_matches(file_ext());
+    let is_md = filename.ends_with(".md");
+    let md_theme = markdown_theme();
+
+    let date_part = strip_journal_ext(filename);
     let display_date = if let Ok(dt) = NaiveDateTime::parse_from_str(date_part, "%Y-%m-%d_%H%M%S") {
         dt.format("%Y年%m月%d日 %H:%M").to_string()
     } else {
         date_part.to_string()
     };
 
-    // Build display lines with styles
     struct DisplayLine {
-        text: String,
-        style: Style,
+        line: Line<'static>,
     }
 
     let mut lines: Vec<DisplayLine> = Vec::new();
     lines.push(DisplayLine {
-        text: String::new(),
-        style: theme::text(),
+        line: Line::from(Span::raw("")),
     });
     lines.push(DisplayLine {
-        text: format!("  {}", display_date),
-        style: theme::accent().add_modifier(Modifier::BOLD),
+        line: Line::from(Span::styled(
+            format!("  {}", display_date),
+            theme::accent().add_modifier(ratatui::style::Modifier::BOLD),
+        )),
     });
     lines.push(DisplayLine {
-        text: String::new(),
-        style: theme::text(),
+        line: Line::from(Span::raw("")),
     });
 
     let term_w = terminal.size()?.width as usize;
@@ -60,41 +62,54 @@ pub fn entry_viewer(
             let wrapped = textwrap::fill(prompt_text, wrap_width);
             for wl in wrapped.lines() {
                 lines.push(DisplayLine {
-                    text: format!("  {}", wl),
-                    style: theme::dimmed(),
+                    line: Line::from(Span::styled(
+                        format!("  {}", wl),
+                        theme::dimmed(),
+                    )),
                 });
             }
             lines.push(DisplayLine {
-                text: String::new(),
-                style: theme::text(),
+                line: Line::from(Span::raw("")),
             });
         } else if stripped == "自由写作" {
             lines.push(DisplayLine {
-                text: "  自由写作".to_string(),
-                style: theme::dimmed(),
+                line: Line::from(Span::styled("  自由写作".to_string(), theme::dimmed())),
             });
             lines.push(DisplayLine {
-                text: String::new(),
-                style: theme::text(),
+                line: Line::from(Span::raw("")),
             });
         } else if stripped.is_empty() {
             lines.push(DisplayLine {
-                text: String::new(),
-                style: theme::text(),
+                line: Line::from(Span::raw("")),
             });
+        } else if is_md {
+            let role = detect_md_role(raw_line);
+            let wrapped = textwrap::fill(raw_line, wrap_width);
+            for (i, wl) in wrapped.lines().enumerate() {
+                let spans = if i == 0 {
+                    highlight_inline(wl, role, &md_theme)
+                } else {
+                    highlight_inline(wl, MdRole::Continuation, &md_theme)
+                };
+                let padded = pad_spans(spans, term_w);
+                lines.push(DisplayLine {
+                    line: Line::from(padded),
+                });
+            }
         } else {
             let wrapped = textwrap::fill(raw_line, wrap_width);
             for wl in wrapped.lines() {
                 lines.push(DisplayLine {
-                    text: format!("  {}", wl),
-                    style: theme::text(),
+                    line: Line::from(Span::styled(
+                        format!("  {}", wl),
+                        theme::text(),
+                    )),
                 });
             }
         }
     }
     lines.push(DisplayLine {
-        text: String::new(),
-        style: theme::text(),
+        line: Line::from(Span::raw("")),
     });
 
     let mut scroll: usize = 0;
@@ -115,7 +130,7 @@ pub fn entry_viewer(
                 }
                 let ld = &lines[line_idx];
                 f.render_widget(
-                    Paragraph::new(ld.text.as_str()).style(ld.style),
+                    Paragraph::new(ld.line.clone()),
                     Rect::new(area.x, area.y + i as u16, area.width, 1),
                 );
             }
@@ -176,4 +191,14 @@ pub fn entry_viewer(
             _ => {}
         }
     }
+}
+
+fn pad_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    use crate::cjk::string_width;
+    let total: usize = spans.iter().map(|s| string_width(&s.content)).sum();
+    let mut result = spans;
+    if total < width {
+        result.push(Span::styled(" ".repeat(width - total), theme::text()));
+    }
+    result
 }

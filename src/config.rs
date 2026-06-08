@@ -5,7 +5,6 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 
 const JOURNAL_DIR: &str = "journal";
-const FILE_EXT: &str = ".txt";
 const CONFIG_FILE: &str = ".pjournal";
 
 fn home_dir() -> PathBuf {
@@ -24,8 +23,23 @@ pub fn sync_state_path() -> PathBuf {
     home_dir().join(".pjournal_sync_state")
 }
 
-pub fn file_ext() -> &'static str {
-    FILE_EXT
+pub fn is_journal_ext(name: &str) -> bool {
+    name.ends_with(".txt") || name.ends_with(".md")
+}
+
+pub fn strip_journal_ext(name: &str) -> &str {
+    if name.ends_with(".md") {
+        name.trim_end_matches(".md")
+    } else {
+        name.trim_end_matches(".txt")
+    }
+}
+
+pub fn format_to_ext(format: &str) -> &str {
+    match format {
+        "md" => ".md",
+        _ => ".txt",
+    }
 }
 
 pub fn tab_width() -> usize {
@@ -56,6 +70,12 @@ pub struct Config {
     pub personal_recent_status: String,
     #[serde(default)]
     pub markdown_enabled: bool,
+    #[serde(default = "default_file_format")]
+    pub file_format: String,
+}
+
+fn default_file_format() -> String {
+    "txt".to_string()
 }
 
 pub fn load_config() -> Config {

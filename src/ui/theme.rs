@@ -28,25 +28,27 @@ pub const GREEN: Color = Color::Rgb(152, 195, 121);       // #98c379
 
 // ── Style presets ──
 
+/// No bg(BG) — fill_background already covers the frame; per-span RGB bg
+/// produces garbage in fbterm (`\x1b[48;2;R;G;Bm`).
 pub fn text() -> Style {
-    Style::default().fg(FG).bg(BG)
+    Style::default().fg(FG)
 }
 
 pub fn accent() -> Style {
-    Style::default().fg(ACCENT).bg(BG)
+    Style::default().fg(ACCENT)
 }
 
 pub fn title_style() -> Style {
-    Style::default().fg(ACCENT).bg(BG).add_modifier(Modifier::BOLD)
+    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
 }
 
 pub fn muted() -> Style {
-    Style::default().fg(MUTED).bg(BG)
+    Style::default().fg(MUTED)
 }
 
 /// Use darker fg instead of DIM modifier — fbterm does not support DIM.
 pub fn dimmed() -> Style {
-    Style::default().fg(DIMMED_FG).bg(BG)
+    Style::default().fg(DIMMED_FG)
 }
 
 pub fn status_bar() -> Style {
@@ -58,7 +60,7 @@ pub fn selected() -> Style {
 }
 
 pub fn help_bar() -> Style {
-    Style::default().fg(MUTED).bg(BG)
+    Style::default().fg(MUTED)
 }
 
 pub fn overlay_bg() -> Style {
@@ -72,9 +74,9 @@ pub fn overlay_text() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// Highlight: use bold accent without per-span bg for fbterm compatibility.
+/// Bold accent, no bg — fbterm-safe (no per-span RGB background).
 pub fn highlight() -> Style {
-    Style::default().fg(ACCENT).bg(BG).add_modifier(Modifier::BOLD)
+    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
 }
 
 /// Fill the entire frame area with the background color.

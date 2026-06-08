@@ -13,7 +13,6 @@ pub fn today_str() -> String {
 
 pub fn entry_exists(date_str: &str) -> bool {
     ensure_journal_dir();
-    let ext = config::file_ext();
     fs::read_dir(config::journal_dir())
         .map(|entries| {
             entries
@@ -21,7 +20,7 @@ pub fn entry_exists(date_str: &str) -> bool {
                 .any(|e| {
                     e.file_name()
                         .to_str()
-                        .map(|n| n.starts_with(date_str) && n.ends_with(ext))
+                        .map(|n| n.starts_with(date_str) && config::is_journal_ext(n))
                         .unwrap_or(false)
                 })
         })
@@ -31,7 +30,6 @@ pub fn entry_exists(date_str: &str) -> bool {
 pub fn entry_count_today() -> usize {
     ensure_journal_dir();
     let ds = today_str();
-    let ext = config::file_ext();
     fs::read_dir(config::journal_dir())
         .map(|entries| {
             entries
@@ -39,7 +37,7 @@ pub fn entry_count_today() -> usize {
                 .filter(|e| {
                     e.file_name()
                         .to_str()
-                        .map(|n| n.starts_with(&ds) && n.ends_with(ext))
+                        .map(|n| n.starts_with(&ds) && config::is_journal_ext(n))
                         .unwrap_or(false)
                 })
                 .count()
@@ -49,7 +47,6 @@ pub fn entry_count_today() -> usize {
 
 pub fn list_entries() -> Vec<String> {
     ensure_journal_dir();
-    let ext = config::file_ext();
     let mut files: Vec<String> = fs::read_dir(config::journal_dir())
         .map(|entries| {
             entries
@@ -57,7 +54,7 @@ pub fn list_entries() -> Vec<String> {
                 .filter(|e| {
                     e.file_name()
                         .to_str()
-                        .map(|n| n.ends_with(ext) && !n.starts_with('.'))
+                        .map(|n| config::is_journal_ext(n) && !n.starts_with('.'))
                         .unwrap_or(false)
                 })
                 .filter_map(|e| e.file_name().to_str().map(String::from))
@@ -97,7 +94,6 @@ pub fn get_streak() -> usize {
 
 pub fn get_total_entries() -> usize {
     ensure_journal_dir();
-    let ext = config::file_ext();
     fs::read_dir(config::journal_dir())
         .map(|entries| {
             entries
@@ -105,7 +101,7 @@ pub fn get_total_entries() -> usize {
                 .filter(|e| {
                     e.file_name()
                         .to_str()
-                        .map(|n| n.ends_with(ext) && !n.starts_with('.'))
+                        .map(|n| config::is_journal_ext(n) && !n.starts_with('.'))
                         .unwrap_or(false)
                 })
                 .count()
@@ -115,8 +111,10 @@ pub fn get_total_entries() -> usize {
 
 pub fn save_entry(text: &str) -> io::Result<String> {
     ensure_journal_dir();
+    let cfg = config::load_config();
+    let ext = config::format_to_ext(&cfg.file_format);
     let timestamp = Local::now().format("%Y-%m-%d_%H%M%S").to_string();
-    let filename = format!("{}{}", timestamp, config::file_ext());
+    let filename = format!("{}{}", timestamp, ext);
     let filepath = config::journal_dir().join(&filename);
     fs::write(&filepath, text)?;
     Ok(filepath.to_string_lossy().to_string())

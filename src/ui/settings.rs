@@ -14,6 +14,7 @@ use std::io;
 enum FieldKind {
     Text,
     Bool,
+    Choice,
 }
 
 struct FieldDef {
@@ -31,12 +32,20 @@ struct GroupDef {
 static GROUPS: &[GroupDef] = &[
     GroupDef {
         title: "── 显示 ──",
-        fields: &[FieldDef {
-            key: "markdown_enabled",
-            label: "Markdown 语法高亮",
-            masked: false,
-            kind: FieldKind::Bool,
-        }],
+        fields: &[
+            FieldDef {
+                key: "markdown_enabled",
+                label: "Markdown 语法高亮",
+                masked: false,
+                kind: FieldKind::Bool,
+            },
+            FieldDef {
+                key: "file_format",
+                label: "文件格式",
+                masked: false,
+                kind: FieldKind::Choice,
+            },
+        ],
     },
     GroupDef {
         title: "── AI ──",
@@ -253,6 +262,8 @@ pub fn settings_screen(
                     let field = field_def(&rows[sel_idx]);
                     if field.kind == FieldKind::Bool {
                         toggle_bool_field(&rows[sel_idx], &mut config);
+                    } else if field.kind == FieldKind::Choice {
+                        toggle_choice_field(&rows[sel_idx], &mut config);
                     } else {
                         edit_buf = get_config_value(&config, field_key(&rows[sel_idx]));
                         cursor_pos = edit_buf.len();
@@ -281,6 +292,18 @@ fn toggle_bool_field(row: &FieldRow, config: &mut Config) {
     save_config(config).ok();
 }
 
+fn toggle_choice_field(row: &FieldRow, config: &mut Config) {
+    let key = field_key(row);
+    if key == "file_format" {
+        config.file_format = if config.file_format == "md" {
+            "txt".to_string()
+        } else {
+            "md".to_string()
+        };
+    }
+    save_config(config).ok();
+}
+
 fn get_config_value(config: &Config, key: &str) -> String {
     match key {
         "deepseek_api_key" => config.deepseek_api_key.clone(),
@@ -292,6 +315,7 @@ fn get_config_value(config: &Config, key: &str) -> String {
         "personal_experience" => config.personal_experience.clone(),
         "personal_hobbies" => config.personal_hobbies.clone(),
         "personal_recent_status" => config.personal_recent_status.clone(),
+        "file_format" => config.file_format.clone(),
         _ => String::new(),
     }
 }
@@ -315,6 +339,7 @@ fn clear_field(row: &FieldRow, config: &mut Config) {
         "personal_experience" => config.personal_experience.clear(),
         "personal_hobbies" => config.personal_hobbies.clear(),
         "personal_recent_status" => config.personal_recent_status.clear(),
+        "file_format" => config.file_format = "txt".to_string(),
         _ => {}
     }
     save_config(config).ok();
@@ -397,6 +422,8 @@ fn draw_settings(
                 } else {
                     "✗ 关".to_string()
                 }
+            } else if field.kind == FieldKind::Choice {
+                value.to_string()
             } else if field.masked && !value.is_empty() {
                 "*".repeat(value.chars().count().min(20))
             } else if !value.is_empty() {
@@ -451,8 +478,13 @@ fn draw_settings(
     // Help bar
     let help = if editing {
         " [回车] 确认  [Esc] 取消"
-    } else if !rows.is_empty() && !rows[sel_idx].is_group && field_def(&rows[sel_idx]).kind == FieldKind::Bool {
-        " [回车] 切换  [q] 返回"
+    } else if !rows.is_empty() && !rows[sel_idx].is_group {
+        let kind = field_def(&rows[sel_idx]).kind;
+        if kind == FieldKind::Bool || kind == FieldKind::Choice {
+            " [回车] 切换  [q] 返回"
+        } else {
+            " [回车] 编辑  [d] 清空  [q] 返回"
+        }
     } else {
         " [回车] 编辑  [d] 清空  [q] 返回"
     };

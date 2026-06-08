@@ -11,7 +11,9 @@ use std::io;
 use std::os::unix::fs::PermissionsExt as _;
 use std::time::Duration;
 
-const FILE_EXT: &str = ".txt";
+fn is_journal_ext(name: &str) -> bool {
+    name.ends_with(".txt") || name.ends_with(".md")
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename = "multistatus")]
@@ -236,7 +238,7 @@ fn webdav_propfind(
                 let filename =
                     url_decode_path(&href.trim_end_matches('/').split('/').last().unwrap_or(""));
 
-                if filename.is_empty() || !filename.ends_with(FILE_EXT) {
+                if filename.is_empty() || !is_journal_ext(&filename) {
                     continue;
                 }
 

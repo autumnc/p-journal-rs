@@ -655,7 +655,7 @@ fn render_editor(
 
 // ── Markdown highlighting ──
 
-fn markdown_theme() -> ThemeConfig {
+pub(crate) fn markdown_theme() -> ThemeConfig {
     ThemeConfig::default()
         .with_text_color(theme::FG)
         .with_muted_text_color(theme::MUTED)
@@ -668,7 +668,7 @@ fn markdown_theme() -> ThemeConfig {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum MdRole {
+pub(crate) enum MdRole {
     Heading1,
     Heading2,
     Heading3,
@@ -682,7 +682,7 @@ enum MdRole {
     Normal,
 }
 
-fn detect_md_role(line: &str) -> MdRole {
+pub(crate) fn detect_md_role(line: &str) -> MdRole {
     let trimmed = line.trim_start();
     if trimmed.starts_with("```") {
         return MdRole::CodeFence;
@@ -718,7 +718,7 @@ fn detect_md_role(line: &str) -> MdRole {
     MdRole::Normal
 }
 
-fn role_base_style(role: MdRole, theme: &ThemeConfig) -> Style {
+pub(crate) fn role_base_style(role: MdRole, theme: &ThemeConfig) -> Style {
     let base = Style::default().fg(theme.get_text_color());
     match role {
         MdRole::Heading1 => base.add_modifier(Modifier::BOLD).fg(theme.get_primary_color()),
@@ -735,7 +735,7 @@ fn role_base_style(role: MdRole, theme: &ThemeConfig) -> Style {
     }
 }
 
-fn highlight_inline(text: &str, role: MdRole, theme: &ThemeConfig) -> Vec<Span<'static>> {
+pub(crate) fn highlight_inline(text: &str, role: MdRole, theme: &ThemeConfig) -> Vec<Span<'static>> {
     let base = role_base_style(role, theme);
     let muted = Style::default()
         .fg(theme.get_muted_text_color());

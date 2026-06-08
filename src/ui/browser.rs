@@ -1,5 +1,5 @@
 use crate::cjk::string_width;
-use crate::config::{file_ext, load_config};
+use crate::config::{load_config, strip_journal_ext};
 use crate::flomo::send_to_flomo;
 use crate::journal::{extract_body_from_entry, list_entries, read_entry};
 use crate::ui::theme::{self, fill_background};
@@ -124,7 +124,7 @@ fn draw_browser(f: &mut Frame, entries: &[String], sel: usize, scroll_off: usize
                 break;
             }
             let fname = &entries[idx];
-            let date_part = fname.trim_end_matches(file_ext());
+            let date_part = strip_journal_ext(fname);
             let display_date = if let Ok(dt) =
                 NaiveDateTime::parse_from_str(date_part, "%Y-%m-%d_%H%M%S")
             {
@@ -218,7 +218,7 @@ fn confirm_delete(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<io::Stderr>>,
     fname: &str,
 ) -> io::Result<bool> {
-    let date_part = fname.trim_end_matches(file_ext());
+    let date_part = strip_journal_ext(fname);
     let display_date = if let Ok(dt) = NaiveDateTime::parse_from_str(date_part, "%Y-%m-%d_%H%M%S") {
         dt.format("%Y年%m月%d日 %H:%M").to_string()
     } else {
