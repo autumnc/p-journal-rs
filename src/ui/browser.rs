@@ -2,11 +2,11 @@ use crate::cjk::string_width;
 use crate::config::{file_ext, load_config};
 use crate::flomo::send_to_flomo;
 use crate::journal::{extract_body_from_entry, list_entries, read_entry};
+use crate::ui::theme::{self, fill_background};
 use chrono::NaiveDateTime;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
     widgets::Paragraph,
     Frame,
 };
@@ -93,6 +93,7 @@ pub fn entry_browser(
 }
 
 fn draw_browser(f: &mut Frame, entries: &[String], sel: usize, scroll_off: usize) {
+    fill_background(f);
     let area = f.area();
     let h = area.height as usize;
     let w = area.width as usize;
@@ -100,7 +101,7 @@ fn draw_browser(f: &mut Frame, entries: &[String], sel: usize, scroll_off: usize
 
     // Header
     f.render_widget(
-        Paragraph::new(" 过往日记").style(Style::default().add_modifier(Modifier::BOLD)),
+        Paragraph::new(" 过往日记").style(theme::title_style()),
         Rect::new(area.x, area.y, area.width, 1),
     );
 
@@ -108,7 +109,7 @@ fn draw_browser(f: &mut Frame, entries: &[String], sel: usize, scroll_off: usize
         let msg = "暂无日记。";
         let mw = string_width(msg) as u16;
         f.render_widget(
-            Paragraph::new(msg).style(Style::default().add_modifier(Modifier::DIM)),
+            Paragraph::new(msg).style(theme::dimmed()),
             Rect::new(
                 area.x + (area.width.saturating_sub(mw)) / 2,
                 area.y + area.height / 2,
@@ -162,9 +163,9 @@ fn draw_browser(f: &mut Frame, entries: &[String], sel: usize, scroll_off: usize
 
             let row = i + 1;
             let (prefix, style) = if idx == sel {
-                (" › ", Style::default().add_modifier(Modifier::REVERSED))
+                (" › ", theme::selected())
             } else {
-                ("   ", Style::default())
+                ("   ", theme::text())
             };
 
             let line = format!("{}{}  {}", prefix, display_date, preview);
@@ -189,7 +190,7 @@ fn draw_browser(f: &mut Frame, entries: &[String], sel: usize, scroll_off: usize
             let by = 1u16 + bar_top as u16 + bi as u16;
             if by < area.height.saturating_sub(2) {
                 f.render_widget(
-                    Paragraph::new("│").style(Style::default().add_modifier(Modifier::DIM)),
+                    Paragraph::new("│").style(theme::dimmed()),
                     Rect::new(area.width - 1, by, 1, 1),
                 );
             }
@@ -199,7 +200,7 @@ fn draw_browser(f: &mut Frame, entries: &[String], sel: usize, scroll_off: usize
     // Help bar
     let help = " [回车] 阅读  [d] 删除  [^S] 发送Flomo  [q] 返回";
     f.render_widget(
-        Paragraph::new(help).style(Style::default().add_modifier(Modifier::DIM)),
+        Paragraph::new(help).style(theme::help_bar()),
         Rect::new(area.x, area.y + area.height - 2, area.width, 1),
     );
 
@@ -208,7 +209,7 @@ fn draw_browser(f: &mut Frame, entries: &[String], sel: usize, scroll_off: usize
     let right = format!("{} 篇 ", entries.len());
     let status = format_status_bar(left, &right, w);
     f.render_widget(
-        Paragraph::new(status).style(Style::default().add_modifier(Modifier::REVERSED)),
+        Paragraph::new(status).style(theme::status_bar()),
         Rect::new(area.x, area.y + area.height - 1, area.width, 1),
     );
 }
@@ -226,17 +227,23 @@ fn confirm_delete(
     let msg = format!("删除 {} 的日记？(y/n)", display_date);
 
     terminal.draw(|f| {
+        fill_background(f);
         let area = f.area();
         let mw = string_width(&msg) as u16 + 4;
+        let mh = 3u16;
         let mx = (area.width.saturating_sub(mw)) / 2;
-        let my = area.height / 2;
+        let my = (area.height.saturating_sub(mh)) / 2;
+
+        for i in 0..mh {
+            let pad = " ".repeat(mw as usize);
+            f.render_widget(
+                Paragraph::new(pad).style(theme::overlay_bg()),
+                Rect::new(area.x + mx, my + i, mw, 1),
+            );
+        }
         f.render_widget(
-            Paragraph::new(format!(" {}", msg)).style(
-                Style::default()
-                    .add_modifier(Modifier::REVERSED)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Rect::new(area.x + mx, my, mw, 1),
+            Paragraph::new(format!("  {}", msg)).style(theme::overlay_text()),
+            Rect::new(area.x + mx, my + 1, mw, 1),
         );
     })?;
 
@@ -262,6 +269,7 @@ pub fn show_message(
 ) -> io::Result<()> {
     let msg = msg.to_string();
     terminal.draw(|f| {
+        fill_background(f);
         let area = f.area();
         let mw = (string_width(&msg) + 6) as u16;
         let mh = 3u16;
@@ -271,16 +279,12 @@ pub fn show_message(
         for i in 0..mh {
             let pad = " ".repeat(mw as usize);
             f.render_widget(
-                Paragraph::new(pad).style(Style::default().add_modifier(Modifier::REVERSED)),
+                Paragraph::new(pad).style(theme::overlay_bg()),
                 Rect::new(area.x + mx, my + i, mw, 1),
             );
         }
         f.render_widget(
-            Paragraph::new(format!("   {}   ", msg)).style(
-                Style::default()
-                    .add_modifier(Modifier::REVERSED)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Paragraph::new(format!("   {}   ", msg)).style(theme::overlay_text()),
             Rect::new(area.x + mx + 2, my + 1, mw.saturating_sub(4), 1),
         );
     })?;

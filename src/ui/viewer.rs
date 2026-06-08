@@ -2,11 +2,12 @@ use crate::config::{file_ext, load_config};
 use crate::flomo::send_to_flomo;
 use crate::journal::{extract_body_from_entry, read_entry};
 use crate::ui::browser::{format_status_bar, show_message};
+use crate::ui::theme::{self, fill_background};
 use chrono::NaiveDateTime;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     widgets::Paragraph,
 };
 use std::io;
@@ -33,19 +34,18 @@ pub fn entry_viewer(
         style: Style,
     }
 
-    let accent = Style::default().fg(Color::Yellow);
     let mut lines: Vec<DisplayLine> = Vec::new();
     lines.push(DisplayLine {
         text: String::new(),
-        style: Style::default(),
+        style: theme::text(),
     });
     lines.push(DisplayLine {
         text: format!("  {}", display_date),
-        style: accent.add_modifier(Modifier::BOLD),
+        style: theme::accent().add_modifier(Modifier::BOLD),
     });
     lines.push(DisplayLine {
         text: String::new(),
-        style: Style::default(),
+        style: theme::text(),
     });
 
     let term_w = terminal.size()?.width as usize;
@@ -61,46 +61,47 @@ pub fn entry_viewer(
             for wl in wrapped.lines() {
                 lines.push(DisplayLine {
                     text: format!("  {}", wl),
-                    style: accent.add_modifier(Modifier::DIM),
+                    style: theme::dimmed(),
                 });
             }
             lines.push(DisplayLine {
                 text: String::new(),
-                style: Style::default(),
+                style: theme::text(),
             });
         } else if stripped == "自由写作" {
             lines.push(DisplayLine {
                 text: "  自由写作".to_string(),
-                style: Style::default().add_modifier(Modifier::DIM),
+                style: theme::dimmed(),
             });
             lines.push(DisplayLine {
                 text: String::new(),
-                style: Style::default(),
+                style: theme::text(),
             });
         } else if stripped.is_empty() {
             lines.push(DisplayLine {
                 text: String::new(),
-                style: Style::default(),
+                style: theme::text(),
             });
         } else {
             let wrapped = textwrap::fill(raw_line, wrap_width);
             for wl in wrapped.lines() {
                 lines.push(DisplayLine {
                     text: format!("  {}", wl),
-                    style: Style::default(),
+                    style: theme::text(),
                 });
             }
         }
     }
     lines.push(DisplayLine {
         text: String::new(),
-        style: Style::default(),
+        style: theme::text(),
     });
 
     let mut scroll: usize = 0;
 
     loop {
         terminal.draw(|f| {
+            fill_background(f);
             let area = f.area();
             let h = area.height as usize;
             let text_h = h.saturating_sub(2);
@@ -133,14 +134,14 @@ pub fn entry_viewer(
             let left = format!(" {}  (只读)", display_date);
             let status = format_status_bar(&left, &pos, area.width as usize);
             f.render_widget(
-                Paragraph::new(status).style(Style::default().add_modifier(Modifier::REVERSED)),
+                Paragraph::new(status).style(theme::status_bar()),
                 Rect::new(area.x, area.y + area.height - 1, area.width, 1),
             );
 
             // Help bar
             let help = " ↑↓ 滚动  g/G 顶/底  ^S 发送Flomo  q:返回";
             f.render_widget(
-                Paragraph::new(help).style(Style::default().add_modifier(Modifier::DIM)),
+                Paragraph::new(help).style(theme::help_bar()),
                 Rect::new(area.x, area.y + area.height - 2, area.width, 1),
             );
         })?;

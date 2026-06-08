@@ -16,17 +16,46 @@ use crate::ui::settings::settings_screen;
 use crate::ui::viewer::entry_viewer;
 use chrono::Local;
 use crossterm::{
+    event::{
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use rand::Rng as _;
 use ratatui::backend::CrosstermBackend;
 use std::io;
+use std::panic;
 
 fn main() -> io::Result<()> {
+    let supports_ke = matches!(
+        crossterm::terminal::supports_keyboard_enhancement(),
+        Ok(true)
+    );
+
+    let original_hook = panic::take_hook();
+    let ke = supports_ke;
+    panic::set_hook(Box::new(move |info| {
+        let _ = restore_terminal(ke);
+        original_hook(info);
+    }));
+
     enable_raw_mode()?;
     let mut stderr = io::stderr();
-    execute!(stderr, EnterAlternateScreen)?;
+
+    if supports_ke {
+        execute!(
+            stderr,
+            EnterAlternateScreen,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            ),
+        )?;
+    } else {
+        execute!(stderr, EnterAlternateScreen)?;
+    }
 
     let backend = CrosstermBackend::new(io::stderr());
     let mut terminal = ratatui::Terminal::new(backend)?;
@@ -91,8 +120,17 @@ fn main() -> io::Result<()> {
         }
     }
 
-    execute!(io::stderr(), LeaveAlternateScreen)?;
-    disable_raw_mode()?;
+    restore_terminal(supports_ke)?;
     println!("再见。");
+    Ok(())
+}
+
+fn restore_terminal(supports_ke: bool) -> io::Result<()> {
+    let mut stderr = io::stderr();
+    if supports_ke {
+        execute!(stderr, PopKeyboardEnhancementFlags)?;
+    }
+    execute!(stderr, LeaveAlternateScreen)?;
+    disable_raw_mode()?;
     Ok(())
 }

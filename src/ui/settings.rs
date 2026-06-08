@@ -1,9 +1,10 @@
 use crate::cjk::string_width;
 use crate::config::{load_config, save_config, Config};
+use crate::ui::theme::{self, fill_background};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::Modifier,
     widgets::Paragraph,
     Frame,
 };
@@ -121,7 +122,6 @@ pub fn settings_screen(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<io::Stderr>>,
 ) -> io::Result<()> {
     let mut config = load_config();
-    let accent = Style::default().fg(Color::Yellow);
 
     // Build flat display rows
     let mut rows: Vec<FieldRow> = Vec::new();
@@ -154,7 +154,6 @@ pub fn settings_screen(
                 &config,
                 sel_idx,
                 scroll_off,
-                &accent,
                 editing,
                 &edit_buf,
                 cursor_pos,
@@ -348,11 +347,11 @@ fn draw_settings(
     config: &Config,
     sel_idx: usize,
     scroll_off: usize,
-    accent: &Style,
     editing: bool,
     edit_buf: &str,
     cursor_pos: usize,
 ) {
+    fill_background(f);
     let area = f.area();
     let h = area.height as usize;
     let w = area.width as usize;
@@ -363,7 +362,7 @@ fn draw_settings(
     let title_w = string_width(title) as u16;
     let title_x = (area.width.saturating_sub(title_w)) / 2;
     f.render_widget(
-        Paragraph::new(title).style(accent.add_modifier(Modifier::BOLD)),
+        Paragraph::new(title).style(theme::title_style()),
         Rect::new(area.x + title_x, area.y, title_w, 1),
     );
 
@@ -375,7 +374,7 @@ fn draw_settings(
             let group = &GROUPS[field_row.group_idx];
             f.render_widget(
                 Paragraph::new(format!(" {}", group.title))
-                    .style(accent.add_modifier(Modifier::BOLD)),
+                    .style(theme::accent().add_modifier(Modifier::BOLD)),
                 Rect::new(area.x, area.y + draw_row, area.width, 1),
             );
         } else {
@@ -413,15 +412,21 @@ fn draw_settings(
             };
 
             let style = if is_sel {
-                Style::default().add_modifier(Modifier::REVERSED)
+                theme::selected()
             } else {
-                Style::default()
+                theme::text()
             };
 
             let line = format!("  {}: ", field.label);
             let full_line = format!("{}{}", line, display_value);
+            let full_w = string_width(&full_line);
+            let padded = if full_w < w {
+                format!("{}{}", full_line, " ".repeat(w - full_w))
+            } else {
+                full_line
+            };
             f.render_widget(
-                Paragraph::new(full_line).style(style),
+                Paragraph::new(padded).style(style),
                 Rect::new(area.x, area.y + draw_row, area.width, 1),
             );
         }
@@ -436,7 +441,7 @@ fn draw_settings(
             let by = 1u16 + bar_top as u16 + bi as u16;
             if by < area.height.saturating_sub(2) {
                 f.render_widget(
-                    Paragraph::new("│").style(Style::default().add_modifier(Modifier::DIM)),
+                    Paragraph::new("│").style(theme::dimmed()),
                     Rect::new(area.width - 1, by, 1, 1),
                 );
             }
@@ -452,14 +457,14 @@ fn draw_settings(
         " [回车] 编辑  [d] 清空  [q] 返回"
     };
     f.render_widget(
-        Paragraph::new(help).style(Style::default().add_modifier(Modifier::DIM)),
+        Paragraph::new(help).style(theme::help_bar()),
         Rect::new(area.x, area.y + area.height - 2, area.width, 1),
     );
 
     // Status bar
     let status = format_status_bar(" ~/设置", "", w);
     f.render_widget(
-        Paragraph::new(status).style(Style::default().add_modifier(Modifier::REVERSED)),
+        Paragraph::new(status).style(theme::status_bar()),
         Rect::new(area.x, area.y + area.height - 1, area.width, 1),
     );
 }

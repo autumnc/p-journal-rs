@@ -1,10 +1,12 @@
 use crate::cjk::string_width;
 use crate::journal;
+use crate::ui::theme::{self, fill_background};
 use chrono::Local;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
+    text::{Line, Span},
     widgets::Paragraph,
     Frame,
 };
@@ -22,11 +24,9 @@ pub enum MainAction {
 pub fn main_screen(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<io::Stderr>>,
 ) -> io::Result<MainAction> {
-    let accent = Style::default().fg(Color::Yellow);
-
     loop {
         terminal.draw(|f| {
-            draw_main(f, &accent);
+            draw_main(f);
         })?;
 
         let total = journal::get_total_entries();
@@ -49,7 +49,18 @@ pub fn main_screen(
     }
 }
 
-fn draw_main(f: &mut Frame, accent: &Style) {
+fn day_style(is_today: bool, is_weekend: bool) -> Style {
+    if is_today {
+        theme::accent().add_modifier(Modifier::BOLD)
+    } else if is_weekend {
+        Style::default().fg(theme::PURPLE).bg(theme::BG)
+    } else {
+        theme::text()
+    }
+}
+
+fn draw_main(f: &mut Frame) {
+    fill_background(f);
     let area = f.area();
     let today = Local::now().date_naive();
     let week_dates = journal::get_week_dates();
@@ -57,96 +68,151 @@ fn draw_main(f: &mut Frame, accent: &Style) {
     let streak = journal::get_streak();
     let total = journal::get_total_entries();
 
-    // Title
-    let title = "个人日记";
+    // ── Title ──
+    let title = "个 人 日 记";
     let tw = string_width(title) as u16;
-    let title_area = centered_rect(area, tw, 1, 1);
     f.render_widget(
-        Paragraph::new(title).style(Style::default().add_modifier(Modifier::BOLD)),
-        title_area,
+        Paragraph::new(title).style(theme::title_style()),
+        centered_rect(area, tw, 1, 1),
     );
 
-    // Week tracker
+    // Decorative divider
+    let divider = "─".repeat(36);
+    let dw = string_width(&divider) as u16;
+    f.render_widget(
+        Paragraph::new(divider).style(theme::dimmed()),
+        centered_rect(area, dw, 1, 2),
+    );
+
+    // ── Week tracker with per-day colors ──
     let day_names = ["一", "二", "三", "四", "五", "六", "日"];
-    let mut header_parts = Vec::new();
-    let mut mark_parts = Vec::new();
+    let mut day_spans: Vec<Span> = vec![Span::styled("  ", theme::text())];
+    let mut mark_spans: Vec<Span> = vec![Span::styled("  ", theme::text())];
+
     for (i, d) in week_dates.iter().enumerate() {
         let dstr = d.format("%Y-%m-%d").to_string();
         let is_today = *d == today;
+        let is_weekend = i >= 5;
         let has_entry = journal::entry_exists(&dstr);
         let name = day_names[i];
-        header_parts.push(if is_today {
+        let style = day_style(is_today, is_weekend);
+
+        let label = if is_today {
             format!("[{}]", name)
         } else {
             format!(" {} ", name)
-        });
-        if has_entry {
-            mark_parts.push(" ✓  ".to_string());
+        };
+        day_spans.push(Span::styled(label, style));
+        day_spans.push(Span::styled("  ", theme::text()));
+
+        let mark = if has_entry {
+            Span::styled(" ✓  ", Style::default().fg(theme::GREEN).bg(theme::BG).add_modifier(Modifier::BOLD))
         } else if *d <= today {
-            mark_parts.push(" ·  ".to_string());
+            Span::styled(" ·  ", theme::dimmed())
         } else {
-            mark_parts.push("    ".to_string());
-        }
+            Span::styled("    ", theme::text())
+        };
+        mark_spans.push(mark);
+        mark_spans.push(Span::styled("  ", theme::text()));
     }
 
-    let header = format!("  {}", header_parts.join("  "));
-    let marks = format!("  {}", mark_parts.join("  "));
-    let hw = string_width(&header) as u16;
-    let mw = string_width(&marks) as u16;
+    let day_line = Line::from(day_spans);
+    let mark_line = Line::from(mark_spans);
+    let day_w = day_line.width() as u16;
+    let mark_w = mark_line.width() as u16;
 
-    f.render_widget(Paragraph::new(header), centered_rect(area, hw, 1, 4));
     f.render_widget(
-        Paragraph::new(marks).style(Style::default().add_modifier(Modifier::BOLD)),
-        centered_rect(area, mw, 1, 5),
+        Paragraph::new(day_line),
+        centered_rect(area, day_w, 1, 4),
+    );
+    f.render_widget(
+        Paragraph::new(mark_line),
+        centered_rect(area, mark_w, 1, 5),
     );
 
-    // Stats
-    let stats = format!("连续: {} 天  ·  总计: {} 篇", streak, total);
-    let sw = string_width(&stats) as u16;
+    // ── Stats ──
+    let stats_spans = vec![
+        Span::styled(format!("连续: {} 天", streak), theme::accent().add_modifier(Modifier::BOLD)),
+        Span::styled("  ·  ", theme::muted()),
+        Span::styled(format!("总计: {} 篇", total), theme::text()),
+    ];
+    let stats_line = Line::from(stats_spans);
+    let sw = stats_line.width() as u16;
     f.render_widget(
-        Paragraph::new(stats).style(Style::default().add_modifier(Modifier::DIM)),
-        centered_rect(area, sw, 1, 8),
+        Paragraph::new(stats_line),
+        centered_rect(area, sw, 1, 7),
     );
 
-    // Today status
-    let (status, status_style) = if today_count > 0 {
+    // ── Today status ──
+    let (status_line, status_w) = if today_count > 0 {
         let s = if today_count == 1 {
             "✓ 今日已写 1 篇".to_string()
         } else {
             format!("✓ 今日已写 {} 篇", today_count)
         };
-        (s, accent.add_modifier(Modifier::BOLD))
+        let w = string_width(&s) as u16;
+        let spans = vec![
+            Span::styled("✓", Style::default().fg(theme::GREEN).bg(theme::BG).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" 今日已写 {} 篇", today_count), theme::accent().add_modifier(Modifier::BOLD)),
+        ];
+        (Paragraph::new(Line::from(spans)), w)
     } else {
-        ("今日尚未写日记".to_string(), Style::default().add_modifier(Modifier::DIM))
+        let s = "今日尚未写日记".to_string();
+        let w = string_width(&s) as u16;
+        (Paragraph::new(s).style(theme::dimmed()), w)
     };
-    let stw = string_width(&status) as u16;
-    f.render_widget(Paragraph::new(status).style(status_style), centered_rect(area, stw, 1, 10));
+    f.render_widget(status_line, centered_rect(area, status_w, 1, 9));
 
-    // Menu
-    let menu = vec![
-        ("[p] 提示写作", Style::default()),
-        ("[f] 自由写作", Style::default()),
-        ("[v] 查看过往日记", if total > 0 { Style::default() } else { continue_style() }),
-        ("[w] 同步到WebDAV", Style::default()),
-        ("[s] 设置", Style::default()),
-        ("", Style::default()),
-        ("[q] 退出", Style::default().add_modifier(Modifier::DIM)),
+    // ── Menu ──
+    let menu_items: Vec<Vec<Span>> = vec![
+        vec![
+            Span::styled("[p]", theme::accent()),
+            Span::styled(" 提示写作", theme::text()),
+        ],
+        vec![
+            Span::styled("[f]", theme::accent()),
+            Span::styled(" 自由写作", theme::text()),
+        ],
+        if total > 0 {
+            vec![
+                Span::styled("[v]", theme::accent()),
+                Span::styled(" 查看过往日记", theme::text()),
+            ]
+        } else {
+            vec![
+                Span::styled("[v]", theme::muted()),
+                Span::styled(" 查看过往日记", theme::dimmed()),
+            ]
+        },
+        vec![
+            Span::styled("[w]", theme::accent()),
+            Span::styled(" 同步到WebDAV", theme::text()),
+        ],
+        vec![
+            Span::styled("[s]", theme::accent()),
+            Span::styled(" 设置", theme::text()),
+        ],
+        vec![],
+        vec![
+            Span::styled("[q]", theme::muted()),
+            Span::styled(" 退出", theme::dimmed()),
+        ],
     ];
 
-    let mut row = 13u16;
-    for (text, style) in &menu {
-        if text.is_empty() {
+    let mut row = 12u16;
+    for item in &menu_items {
+        if item.is_empty() {
             row += 1;
             continue;
         }
-        let tw = string_width(text) as u16;
-        f.render_widget(Paragraph::new(*text).style(*style), centered_rect(area, tw, 1, row));
+        let line = Line::from(item.clone());
+        let w = line.width() as u16;
+        f.render_widget(
+            Paragraph::new(line),
+            centered_rect(area, w, 1, row),
+        );
         row += 1;
     }
-}
-
-fn continue_style() -> Style {
-    Style::default()
 }
 
 fn centered_rect(area: Rect, width: u16, height: u16, y_offset: u16) -> Rect {
@@ -154,4 +220,3 @@ fn centered_rect(area: Rect, width: u16, height: u16, y_offset: u16) -> Rect {
     let y = area.y + y_offset;
     Rect::new(x, y, width, height)
 }
-

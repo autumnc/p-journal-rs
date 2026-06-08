@@ -3,11 +3,12 @@ use crate::config::{load_config, tab_width};
 use crate::deepseek::generate_ai_prompt;
 use crate::flomo::send_to_flomo;
 use crate::ui::browser::{format_status_bar, show_message};
+use crate::ui::theme::{self, fill_background};
 use chrono::Local;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -25,22 +26,20 @@ pub fn journal_editor(
     prompt_text: Option<String>,
 ) -> io::Result<EditorResult> {
     let mut lines: Vec<String> = vec![String::new()];
-    let mut cy: usize = 0; // logical line
-    let mut cx: usize = 0; // byte offset in current line
+    let mut cy: usize = 0;
+    let mut cx: usize = 0;
     let mut scroll_y: usize = 0;
     let mut target_screen_cx: Option<usize> = None;
     let mut current_prompt = prompt_text;
 
-    let accent = Style::default().fg(Color::Yellow);
     let md_theme = markdown_theme();
 
-    // Compute prompt display lines
     let get_prompt_info = |prompt: &Option<String>, term_w: usize| -> (Vec<String>, usize) {
         match prompt {
             Some(ref p) => {
                 let wrapped = textwrap::fill(p, term_w.saturating_sub(6));
                 let plines: Vec<String> = wrapped.lines().map(String::from).collect();
-                let ph = plines.len() + 3; // blank + lines + blank + separator
+                let ph = plines.len() + 3;
                 (plines, ph)
             }
             None => (Vec::new(), 0),
@@ -54,17 +53,12 @@ pub fn journal_editor(
         let (prompt_lines, prompt_h) = get_prompt_info(&current_prompt, w);
         let text_h = h.saturating_sub(2 + prompt_h);
 
-        // Clamp cursor
         cy = cy.min(lines.len().saturating_sub(1));
         cx = cx.min(lines[cy].len());
 
-        // Build wrap map
         let vrows = build_wrap_map(&lines, w);
-
-        // Find cursor visual position
         let (vi_cursor, scx_cursor) = find_cursor_visual(&vrows, &lines, cy, cx);
 
-        // Scroll
         if vi_cursor < scroll_y {
             scroll_y = vi_cursor;
         }
@@ -73,7 +67,6 @@ pub fn journal_editor(
         }
         scroll_y = scroll_y.min(vrows.len().saturating_sub(text_h).max(0));
 
-        // Render
         let cfg = load_config();
         let md_enabled = cfg.markdown_enabled;
         terminal.draw(|f| {
@@ -89,23 +82,70 @@ pub fn journal_editor(
                 scx_cursor,
                 &current_prompt,
                 cy,
-                &accent,
                 md_enabled,
                 &md_theme,
             );
         })?;
 
-        // Input
         let ev = event::read()?;
         let Event::Key(key) = ev else { continue };
         if key.kind == KeyEventKind::Release {
             continue;
         }
 
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
+        // Discard Shift+Arrow — not supported, prevents garbage input in fbterm
+        if shift && matches!(key.code, KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End) {
+            continue;
+        }
+
+        // ── F1-F6: Apply heading level to current line ──
+        if let KeyCode::F(level @ 1..=6) = key.code {
+            let lvl = level as usize;
+            apply_heading(&mut lines, cy, lvl);
+            cx = lines[cy].len();
+            continue;
+        }
+
+        // ── Ctrl+K: show Markdown shortcut help ──
+        if ctrl && key.code == KeyCode::Char('k') {
+            show_md_help(terminal)?;
+            continue;
+        }
+
+        // ── Ctrl+letter style shortcuts (insert markers at cursor) ──
+        if ctrl {
+            match key.code {
+                KeyCode::Char('b') => {
+                    insert_marker(&mut lines, cy, &mut cx, "**");
+                    continue;
+                }
+                KeyCode::Char('t') => {
+                    insert_marker(&mut lines, cy, &mut cx, "*");
+                    continue;
+                }
+                KeyCode::Char('d') => {
+                    insert_marker(&mut lines, cy, &mut cx, "~~");
+                    continue;
+                }
+                KeyCode::Char('u') => {
+                    insert_marker_pair(&mut lines, cy, &mut cx, "<u>", "</u>");
+                    continue;
+                }
+                KeyCode::Char('h') => {
+                    insert_marker(&mut lines, cy, &mut cx, "==");
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        // ── Normal key handling ──
         let mut continue_sticky = false;
 
         match key.code {
-            // Navigation
             KeyCode::Up => {
                 if vi_cursor > 0 {
                     if target_screen_cx.is_none() {
@@ -143,7 +183,6 @@ pub fn journal_editor(
             }
             KeyCode::Left => {
                 if cx > 0 {
-                    // Move back one char (byte offset)
                     if let Some((prev, _)) = lines[cy].char_indices().rev().find(|(i, _)| *i < cx) {
                         cx = prev;
                     } else {
@@ -156,7 +195,6 @@ pub fn journal_editor(
             }
             KeyCode::Right => {
                 if cx < lines[cy].len() {
-                    // Move forward one char
                     if let Some((next, _)) = lines[cy].char_indices().find(|(i, _)| *i > cx) {
                         cx = next;
                     } else {
@@ -201,7 +239,6 @@ pub fn journal_editor(
             // Editing
             KeyCode::Backspace => {
                 if cx > 0 {
-                    // Remove char before cursor
                     if let Some((prev, _)) = lines[cy].char_indices().rev().find(|(i, _)| *i < cx) {
                         lines[cy].remove(prev);
                         cx = prev;
@@ -215,7 +252,6 @@ pub fn journal_editor(
             }
             KeyCode::Delete => {
                 if cx < lines[cy].len() {
-                    // Remove char at cursor
                     if let Some((next, _)) = lines[cy].char_indices().find(|(i, _)| *i >= cx) {
                         lines[cy].remove(next);
                     }
@@ -300,7 +336,6 @@ pub fn journal_editor(
                 return Ok(EditorResult::Commit(text, current_prompt.clone()));
             }
 
-            // Printable chars (including CJK)
             KeyCode::Char(c) => {
                 lines[cy].insert(cx, c);
                 cx += c.len_utf8();
@@ -314,6 +349,31 @@ pub fn journal_editor(
         }
     }
 }
+
+// ── Style shortcut helpers ──
+
+fn insert_marker(lines: &mut Vec<String>, cy: usize, cx: &mut usize, marker: &str) {
+    lines[cy].insert_str(*cx, marker);
+    lines[cy].insert_str(*cx + marker.len(), marker);
+    *cx += marker.len();
+}
+
+fn insert_marker_pair(lines: &mut Vec<String>, cy: usize, cx: &mut usize, open: &str, close: &str) {
+    lines[cy].insert_str(*cx, open);
+    lines[cy].insert_str(*cx + open.len(), close);
+    *cx += open.len();
+}
+
+fn apply_heading(lines: &mut Vec<String>, li: usize, level: usize) {
+    let prefix = "#".repeat(level) + " ";
+    let line = &mut lines[li];
+    let trimmed = line.trim_start();
+    let content = trimmed.trim_start_matches('#');
+    let content = content.strip_prefix(' ').unwrap_or(content);
+    *line = format!("{}{}", prefix, content);
+}
+
+// ── Cursor helpers ──
 
 fn find_cursor_visual(
     vrows: &[VisualRow],
@@ -370,22 +430,89 @@ fn byte_at_screen_pos(line: &str, seg_start: usize, seg_end: usize, screen_cx: u
     byte_pos.min(seg_end)
 }
 
+// ── Markdown help popup ──
+
+fn show_md_help(
+    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<io::Stderr>>,
+) -> io::Result<()> {
+    let lines = [
+        "── Markdown 快捷键 ──",
+        "",
+        "F1-F6      标题 1-6",
+        "^B         加粗 **",
+        "^T         斜体 *",
+        "^D         删除线 ~~",
+        "^U         下划线 <u>",
+        "^H         高亮 ==",
+        "",
+        "按任意键关闭",
+    ];
+
+    let max_w = lines.iter().map(|l| string_width(l)).max().unwrap_or(0);
+    let mw = (max_w + 4) as u16;
+    let mh = lines.len() as u16;
+
+    terminal.draw(|f| {
+        fill_background(f);
+        let area = f.area();
+        let mx = (area.width.saturating_sub(mw)) / 2;
+        let my = (area.height.saturating_sub(mh)) / 2;
+
+        for i in 0..mh {
+            let pad = " ".repeat(mw as usize);
+            f.render_widget(
+                Paragraph::new(pad).style(theme::overlay_bg()),
+                Rect::new(area.x + mx, my + i, mw, 1),
+            );
+        }
+        for (i, text) in lines.iter().enumerate() {
+            let style = if text.starts_with("──") || text.is_empty() {
+                theme::overlay_bg()
+            } else {
+                theme::overlay_bg()
+            };
+            let padded = format!("  {}{}", text, " ".repeat(max_w.saturating_sub(string_width(text))));
+            f.render_widget(
+                Paragraph::new(padded).style(style),
+                Rect::new(area.x + mx, my + i as u16, mw, 1),
+            );
+        }
+    })?;
+
+    loop {
+        let ev = event::read()?;
+        if let Event::Key(key) = ev {
+            if key.kind != KeyEventKind::Release {
+                return Ok(());
+            }
+        }
+    }
+}
+
+// ── Confirmation overlay ──
+
 fn confirm_abandon(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<io::Stderr>>,
 ) -> io::Result<bool> {
     let msg = "放弃这篇日记？(y/n)";
     terminal.draw(|f| {
+        fill_background(f);
         let area = f.area();
         let mw = string_width(msg) as u16 + 4;
+        let mh = 3u16;
         let mx = (area.width.saturating_sub(mw)) / 2;
-        let my = area.height / 2;
+        let my = (area.height.saturating_sub(mh)) / 2;
+
+        for i in 0..mh {
+            let pad = " ".repeat(mw as usize);
+            f.render_widget(
+                Paragraph::new(pad).style(theme::overlay_bg()),
+                Rect::new(area.x + mx, my + i, mw, 1),
+            );
+        }
         f.render_widget(
-            Paragraph::new(format!(" {}", msg)).style(
-                Style::default()
-                    .add_modifier(Modifier::REVERSED)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Rect::new(area.x + mx, my, mw, 1),
+            Paragraph::new(format!("  {}", msg)).style(theme::overlay_text()),
+            Rect::new(area.x + mx, my + 1, mw, 1),
         );
     })?;
     loop {
@@ -403,6 +530,8 @@ fn confirm_abandon(
     }
 }
 
+// ── Rendering ──
+
 fn render_editor(
     f: &mut Frame,
     lines: &[String],
@@ -415,10 +544,10 @@ fn render_editor(
     scx_cursor: usize,
     prompt_text: &Option<String>,
     cy: usize,
-    accent: &Style,
     md_enabled: bool,
     md_theme: &ThemeConfig,
 ) {
+    fill_background(f);
     let area = f.area();
     let w = area.width as usize;
 
@@ -428,7 +557,7 @@ fn render_editor(
         draw_row += 1;
         for pl in prompt_lines {
             f.render_widget(
-                Paragraph::new(format!("   {}", pl)).style(accent.add_modifier(Modifier::DIM)),
+                Paragraph::new(format!("   {}", pl)).style(theme::dimmed()),
                 Rect::new(area.x + 2, area.y + draw_row, area.width.saturating_sub(4), 1),
             );
             draw_row += 1;
@@ -436,39 +565,50 @@ fn render_editor(
         draw_row += 1;
         let sep = "─".repeat(w.saturating_sub(2));
         f.render_widget(
-            Paragraph::new(sep).style(Style::default().add_modifier(Modifier::DIM)),
+            Paragraph::new(sep).style(theme::muted()),
             Rect::new(area.x + 1, area.y + draw_row, area.width.saturating_sub(2), 1),
         );
         draw_row += 1;
     }
 
-    // Draw text
+    // Draw text area
     for i in 0..text_h {
         let vi = scroll_y + i;
         if vi >= vrows.len() {
-            break;
+            let fill = " ".repeat(w);
+            f.render_widget(
+                Paragraph::new(fill).style(theme::text()),
+                Rect::new(area.x, area.y + draw_row + i as u16, area.width, 1),
+            );
+            continue;
         }
         let vr = &vrows[vi];
-        let segment = &lines[vr.logical_line][vr.start_byte..vr.end_byte];
+        let li = vr.logical_line;
+        let seg_start = vr.start_byte;
+        let seg_end = vr.end_byte;
+        let segment = &lines[li][seg_start..seg_end];
 
-        if md_enabled {
-            let is_first = vr.start_byte == 0;
+        let spans = if md_enabled {
+            let is_first = seg_start == 0;
             let role = if is_first {
-                detect_md_role(&lines[vr.logical_line])
+                detect_md_role(&lines[li])
             } else {
                 MdRole::Continuation
             };
-            let spans = highlight_inline(segment, role, md_theme);
-            f.render_widget(
-                Paragraph::new(Line::from(spans)),
-                Rect::new(area.x, area.y + draw_row + i as u16, area.width, 1),
-            );
+            highlight_inline(segment, role, md_theme)
         } else {
-            f.render_widget(
-                Paragraph::new(segment.to_string()),
-                Rect::new(area.x, area.y + draw_row + i as u16, area.width, 1),
-            );
+            vec![Span::styled(segment.to_string(), theme::text())]
+        };
+
+        let seg_w = string_width(segment);
+        let mut padded = spans;
+        if seg_w < w {
+            padded.push(Span::styled(" ".repeat(w - seg_w), theme::text()));
         }
+        f.render_widget(
+            Paragraph::new(Line::from(padded)).style(theme::text()),
+            Rect::new(area.x, area.y + draw_row + i as u16, area.width, 1),
+        );
     }
 
     // Cursor
@@ -481,7 +621,7 @@ fn render_editor(
     }
 
     // Help bar
-    let mut help_parts = vec![" ^W 完成", "^Q 放弃"];
+    let mut help_parts = vec![" ^W 完成", "^Q 放弃", "^K 快捷键"];
     let config = load_config();
     if !config.deepseek_api_key.is_empty() {
         help_parts.push("^P AI提示");
@@ -491,7 +631,7 @@ fn render_editor(
     }
     let help = format!(" {}", help_parts.join("  "));
     f.render_widget(
-        Paragraph::new(help).style(Style::default().add_modifier(Modifier::DIM)),
+        Paragraph::new(help).style(theme::help_bar()),
         Rect::new(area.x, area.y + area.height - 2, area.width, 1),
     );
 
@@ -508,7 +648,7 @@ fn render_editor(
     let line_info = format!("第{}行/共{}行  {}字 ", cy + 1, lines.len(), wc);
     let status = format_status_bar(&mode_label, &line_info, w);
     f.render_widget(
-        Paragraph::new(status).style(Style::default().add_modifier(Modifier::REVERSED)),
+        Paragraph::new(status).style(theme::status_bar()),
         Rect::new(area.x, area.y + area.height - 1, area.width, 1),
     );
 }
@@ -517,14 +657,14 @@ fn render_editor(
 
 fn markdown_theme() -> ThemeConfig {
     ThemeConfig::default()
-        .with_text_color(Color::Rgb(220, 220, 220))
-        .with_muted_text_color(Color::Rgb(100, 100, 100))
-        .with_primary_color(Color::Rgb(100, 180, 255))
-        .with_secondary_color(Color::Rgb(180, 140, 255))
-        .with_info_color(Color::Rgb(120, 180, 220))
-        .with_accent_yellow(Color::Rgb(255, 200, 50))
-        .with_border_color(Color::Rgb(80, 80, 80))
-        .with_focused_border_color(Color::Rgb(140, 140, 140))
+        .with_text_color(theme::FG)
+        .with_muted_text_color(theme::MUTED)
+        .with_primary_color(theme::BLUE)
+        .with_secondary_color(theme::PURPLE)
+        .with_info_color(theme::TEAL)
+        .with_accent_yellow(theme::ACCENT)
+        .with_border_color(theme::BORDER)
+        .with_focused_border_color(theme::MUTED)
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -532,6 +672,9 @@ enum MdRole {
     Heading1,
     Heading2,
     Heading3,
+    Heading4,
+    Heading5,
+    Heading6,
     ListItem,
     Blockquote,
     CodeFence,
@@ -543,6 +686,15 @@ fn detect_md_role(line: &str) -> MdRole {
     let trimmed = line.trim_start();
     if trimmed.starts_with("```") {
         return MdRole::CodeFence;
+    }
+    if trimmed.starts_with("###### ") {
+        return MdRole::Heading6;
+    }
+    if trimmed.starts_with("##### ") {
+        return MdRole::Heading5;
+    }
+    if trimmed.starts_with("#### ") {
+        return MdRole::Heading4;
     }
     if trimmed.starts_with("### ") {
         return MdRole::Heading3;
@@ -572,6 +724,9 @@ fn role_base_style(role: MdRole, theme: &ThemeConfig) -> Style {
         MdRole::Heading1 => base.add_modifier(Modifier::BOLD).fg(theme.get_primary_color()),
         MdRole::Heading2 => base.add_modifier(Modifier::BOLD).fg(theme.get_secondary_color()),
         MdRole::Heading3 => base.add_modifier(Modifier::BOLD).fg(theme.get_info_color()),
+        MdRole::Heading4 => base.add_modifier(Modifier::BOLD).fg(theme.get_text_color()),
+        MdRole::Heading5 => base.add_modifier(Modifier::BOLD).fg(theme.get_muted_text_color()),
+        MdRole::Heading6 => base.fg(theme.get_muted_text_color()),
         MdRole::ListItem => base.fg(theme.get_text_color()),
         MdRole::Blockquote => base.add_modifier(Modifier::ITALIC).fg(theme.get_muted_text_color()),
         MdRole::CodeFence => base.fg(theme.get_accent_yellow()),
@@ -583,12 +738,12 @@ fn role_base_style(role: MdRole, theme: &ThemeConfig) -> Style {
 fn highlight_inline(text: &str, role: MdRole, theme: &ThemeConfig) -> Vec<Span<'static>> {
     let base = role_base_style(role, theme);
     let muted = Style::default()
-        .fg(theme.get_muted_text_color())
-        .add_modifier(Modifier::DIM);
+        .fg(theme.get_muted_text_color());
     let code_style = Style::default().fg(theme.get_accent_yellow());
     let link_style = Style::default()
         .fg(theme.get_primary_color())
         .add_modifier(Modifier::UNDERLINED);
+    let ul_style = Style::default().add_modifier(Modifier::UNDERLINED);
 
     let mut spans: Vec<Span<'static>> = Vec::new();
     let chars: Vec<char> = text.chars().collect();
@@ -608,6 +763,63 @@ fn highlight_inline(text: &str, role: MdRole, theme: &ThemeConfig) -> Vec<Span<'
     }
 
     while i < len {
+        // <u> underline </u>
+        if chars[i] == '<' && i + 2 < len && chars[i + 1] == 'u' && chars[i + 2] == '>' {
+            let mut end = i + 3;
+            let mut found = false;
+            while end + 3 < len {
+                if chars[end] == '<'
+                    && chars[end + 1] == '/'
+                    && chars[end + 2] == 'u'
+                    && chars[end + 3] == '>'
+                {
+                    flush_plain!(i);
+                    spans.push(Span::styled("<u>", muted));
+                    let inner: String = chars[i + 3..end].iter().collect();
+                    spans.push(Span::styled(inner, base.patch(ul_style)));
+                    spans.push(Span::styled("</u>", muted));
+                    i = end + 4;
+                    plain_start = i;
+                    found = true;
+                    break;
+                }
+                end += 1;
+            }
+            if !found {
+                i += 1;
+            }
+            continue;
+        }
+
+        // == highlight ==
+        if chars[i] == '=' && i + 1 < len && chars[i + 1] == '='
+            && !(i + 2 < len && chars[i + 2] == '=')
+        {
+            let mut end = i + 2;
+            let mut found = false;
+            while end + 1 < len {
+                if chars[end] == '='
+                    && chars[end + 1] == '='
+                    && !(end + 2 < len && chars[end + 2] == '=')
+                {
+                    flush_plain!(i);
+                    spans.push(Span::styled("==", muted));
+                    let inner: String = chars[i + 2..end].iter().collect();
+                    spans.push(Span::styled(inner, theme::highlight()));
+                    spans.push(Span::styled("==", muted));
+                    i = end + 2;
+                    plain_start = i;
+                    found = true;
+                    break;
+                }
+                end += 1;
+            }
+            if !found {
+                i += 2;
+            }
+            continue;
+        }
+
         // *** bold italic ***
         if chars[i] == '*' && i + 2 < len && chars[i + 1] == '*' && chars[i + 2] == '*' {
             let mut end = i + 3;
@@ -664,9 +876,8 @@ fn highlight_inline(text: &str, role: MdRole, theme: &ThemeConfig) -> Vec<Span<'
             continue;
         }
 
-        // * italic * or _ italic _ (single, not double/triple)
+        // * italic * or _ italic _
         if chars[i] == '*' || chars[i] == '_' {
-            // Not part of ** or ***
             if i + 1 < len && chars[i + 1] == chars[i] {
                 i += 1;
                 continue;
@@ -679,16 +890,10 @@ fn highlight_inline(text: &str, role: MdRole, theme: &ThemeConfig) -> Vec<Span<'
                     && !(end + 1 < len && chars[end + 1] == delim)
                 {
                     flush_plain!(i);
-                    spans.push(Span::styled(
-                        delim.to_string(),
-                        muted,
-                    ));
+                    spans.push(Span::styled(delim.to_string(), muted));
                     let inner: String = chars[i + 1..end].iter().collect();
                     spans.push(Span::styled(inner, base.add_modifier(Modifier::ITALIC)));
-                    spans.push(Span::styled(
-                        delim.to_string(),
-                        muted,
-                    ));
+                    spans.push(Span::styled(delim.to_string(), muted));
                     i = end + 1;
                     plain_start = i;
                     found = true;
