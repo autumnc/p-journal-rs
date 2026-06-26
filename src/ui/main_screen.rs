@@ -53,7 +53,7 @@ fn day_style(is_today: bool, is_weekend: bool) -> Style {
     if is_today {
         theme::accent().add_modifier(Modifier::BOLD)
     } else if is_weekend {
-        Style::default().fg(theme::PURPLE).bg(theme::BG)
+        Style::default().fg(theme::PURPLE)
     } else {
         theme::text()
     }
@@ -106,7 +106,7 @@ fn draw_main(f: &mut Frame) {
         day_spans.push(Span::styled("  ", theme::text()));
 
         let mark = if has_entry {
-            Span::styled(" ✓  ", Style::default().fg(theme::GREEN).bg(theme::BG).add_modifier(Modifier::BOLD))
+            Span::styled(" ✓  ", Style::default().fg(theme::GREEN).add_modifier(Modifier::BOLD))
         } else if *d <= today {
             Span::styled(" ·  ", theme::dimmed())
         } else {
@@ -152,7 +152,7 @@ fn draw_main(f: &mut Frame) {
         };
         let w = string_width(&s) as u16;
         let spans = vec![
-            Span::styled("✓", Style::default().fg(theme::GREEN).bg(theme::BG).add_modifier(Modifier::BOLD)),
+            Span::styled("✓", Style::default().fg(theme::GREEN).add_modifier(Modifier::BOLD)),
             Span::styled(format!(" 今日已写 {} 篇", today_count), theme::accent().add_modifier(Modifier::BOLD)),
         ];
         (Paragraph::new(Line::from(spans)), w)

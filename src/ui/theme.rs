@@ -8,7 +8,6 @@ use ratatui::{
 // NOTE: fbterm does not support 24-bit RGB on per-span backgrounds, nor the DIM
 // modifier. Use only ANSI-compatible colors for span backgrounds and never use DIM.
 
-pub const BG: Color = Color::Rgb(16, 16, 16);            // #101010
 pub const FG: Color = Color::Rgb(212, 212, 212);          // #d4d4d4
 pub const ACCENT: Color = Color::Rgb(229, 192, 123);      // #e5c07b warm gold
 #[allow(dead_code)]
@@ -28,8 +27,8 @@ pub const GREEN: Color = Color::Rgb(152, 195, 121);       // #98c379
 
 // ── Style presets ──
 
-/// No bg(BG) — fill_background already covers the frame; per-span RGB bg
-/// produces garbage in fbterm (`\x1b[48;2;R;G;Bm`).
+/// Fill uses terminal default bg — per-span RGB bg produces garbage
+/// in fbterm (`\x1b[48;2;R;G;Bm`), so avoid setting bg on spans.
 pub fn text() -> Style {
     Style::default().fg(FG)
 }
@@ -84,7 +83,7 @@ pub fn highlight() -> Style {
 pub fn fill_background(f: &mut Frame) {
     let area = f.area();
     f.render_widget(
-        Block::new().style(Style::default().bg(BG)),
+        Block::new().style(Style::default().bg(Color::Reset)),
         area,
     );
 }
