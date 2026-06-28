@@ -201,6 +201,9 @@ fn draw_main(f: &mut Frame) {
 
     let mut row = 12u16;
     for item in &menu_items {
+        if row >= area.height {
+            break;
+        }
         if item.is_empty() {
             row += 1;
             continue;
