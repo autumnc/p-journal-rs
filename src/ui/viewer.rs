@@ -22,7 +22,7 @@ pub fn entry_viewer(
         None => return Ok(()),
     };
 
-    let is_md = filename.ends_with(".md");
+    let md_enabled = load_config().markdown_enabled;
     let md_theme = markdown_theme();
 
     let date_part = strip_journal_ext(filename);
@@ -82,7 +82,7 @@ pub fn entry_viewer(
             lines.push(DisplayLine {
                 line: Line::from(Span::raw("")),
             });
-        } else if is_md {
+        } else if md_enabled {
             let role = detect_md_role(raw_line);
             let wrapped = textwrap::fill(raw_line, wrap_width);
             for (i, wl) in wrapped.lines().enumerate() {
@@ -154,7 +154,7 @@ pub fn entry_viewer(
             );
 
             // Help bar
-            let help = " ↑↓ 滚动  g/G 顶/底  ^S 发送Flomo  q:返回";
+            let help = " ↑↓ 滚动  g/G 顶/底  ^F 发送Flomo  q:返回";
             f.render_widget(
                 Paragraph::new(help).style(theme::help_bar()),
                 Rect::new(area.x, area.y + area.height - 2, area.width, 1),
@@ -178,7 +178,7 @@ pub fn entry_viewer(
             KeyCode::PageDown => scroll = (scroll + text_h).min(max_scroll),
             KeyCode::Char('g') => scroll = 0,
             KeyCode::Char('G') => scroll = max_scroll,
-            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let body = extract_body_from_entry(&content);
                 if !body.is_empty() {
                     let mut config = load_config();

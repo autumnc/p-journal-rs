@@ -1,6 +1,6 @@
 use crate::cjk::{build_wrap_map, string_width, word_count, VisualRow};
 use crate::config::{load_config, tab_width};
-use crate::deepseek::generate_ai_prompt;
+use crate::deepseek::{generate_ai_prompt, polish_text};
 use crate::flomo::send_to_flomo;
 use crate::ui::browser::{format_status_bar, show_message};
 use crate::ui::theme::{self, fill_background};
@@ -31,6 +31,7 @@ pub fn journal_editor(
     let mut scroll_y: usize = 0;
     let mut target_screen_cx: Option<usize> = None;
     let mut current_prompt = prompt_text;
+    let mut sel_anchor: Option<(usize, usize)> = None;
 
     let md_theme = markdown_theme();
 
@@ -69,6 +70,7 @@ pub fn journal_editor(
 
         let cfg = load_config();
         let md_enabled = cfg.markdown_enabled;
+        let sel_range = sel_anchor.map(|a| range_between(a, (cy, cx)));
         terminal.draw(|f| {
             render_editor(
                 f,
@@ -84,6 +86,8 @@ pub fn journal_editor(
                 cy,
                 md_enabled,
                 &md_theme,
+                sel_range,
+                None,
             );
         })?;
 
@@ -96,22 +100,38 @@ pub fn journal_editor(
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
-        // Discard Shift+Arrow — not supported, prevents garbage input in fbterm
-        if shift && matches!(key.code, KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End) {
-            continue;
+        // Shift+Arrow extends a text selection (anchor + moving cursor).
+        let motion = matches!(
+            key.code,
+            KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Home
+                | KeyCode::End
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+        );
+        let extend = shift && motion;
+        if extend && sel_anchor.is_none() {
+            sel_anchor = Some((cy, cx));
+        }
+        if motion && !extend {
+            sel_anchor = None;
         }
 
         // ── F1-F6: Apply heading level to current line ──
         if let KeyCode::F(level @ 1..=6) = key.code {
+            sel_anchor = None;
             let lvl = level as usize;
             apply_heading(&mut lines, cy, lvl);
             cx = lines[cy].len();
             continue;
         }
 
-        // ── Ctrl+K: show Markdown shortcut help ──
+        // ── Ctrl+K: show full keyboard shortcut help ──
         if ctrl && key.code == KeyCode::Char('k') {
-            show_md_help(terminal)?;
+            show_key_help(terminal)?;
             continue;
         }
 
@@ -119,23 +139,48 @@ pub fn journal_editor(
         if ctrl {
             match key.code {
                 KeyCode::Char('b') => {
+                    sel_anchor = None;
                     insert_marker(&mut lines, cy, &mut cx, "**");
                     continue;
                 }
                 KeyCode::Char('t') => {
+                    sel_anchor = None;
                     insert_marker(&mut lines, cy, &mut cx, "*");
                     continue;
                 }
                 KeyCode::Char('d') => {
+                    sel_anchor = None;
                     insert_marker(&mut lines, cy, &mut cx, "~~");
                     continue;
                 }
                 KeyCode::Char('u') => {
+                    sel_anchor = None;
                     insert_marker_pair(&mut lines, cy, &mut cx, "<u>", "</u>");
                     continue;
                 }
                 KeyCode::Char('h') => {
+                    sel_anchor = None;
                     insert_marker(&mut lines, cy, &mut cx, "==");
+                    continue;
+                }
+                KeyCode::Char('o') => {
+                    let anchor = sel_anchor;
+                    polish_selection(terminal, &mut lines, anchor, &mut cy, &mut cx)?;
+                    sel_anchor = None;
+                    continue;
+                }
+                KeyCode::Char('r') => {
+                    let sel_r = sel_anchor.map(|a| range_between(a, (cy, cx)));
+                    find_replace_dialog(
+                        terminal,
+                        &mut lines,
+                        &mut cy,
+                        &mut cx,
+                        &current_prompt,
+                        md_enabled,
+                        &md_theme,
+                        sel_r,
+                    )?;
                     continue;
                 }
                 _ => {}
@@ -238,7 +283,9 @@ pub fn journal_editor(
 
             // Editing
             KeyCode::Backspace => {
-                if cx > 0 {
+                if delete_selection(&mut lines, &mut cy, &mut cx, sel_anchor) {
+                    sel_anchor = None;
+                } else if cx > 0 {
                     if let Some((prev, _)) = lines[cy].char_indices().rev().find(|(i, _)| *i < cx) {
                         lines[cy].remove(prev);
                         cx = prev;
@@ -251,7 +298,9 @@ pub fn journal_editor(
                 }
             }
             KeyCode::Delete => {
-                if cx < lines[cy].len() {
+                if delete_selection(&mut lines, &mut cy, &mut cx, sel_anchor) {
+                    sel_anchor = None;
+                } else if cx < lines[cy].len() {
                     if let Some((next, _)) = lines[cy].char_indices().find(|(i, _)| *i >= cx) {
                         lines[cy].remove(next);
                     }
@@ -261,6 +310,7 @@ pub fn journal_editor(
                 }
             }
             KeyCode::Enter => {
+                sel_anchor = None;
                 let rest = lines[cy][cx..].to_string();
                 lines[cy].truncate(cx);
                 cy += 1;
@@ -268,11 +318,12 @@ pub fn journal_editor(
                 cx = 0;
             }
             KeyCode::Tab => {
+                sel_anchor = None;
                 let spaces = " ".repeat(tab_width());
                 lines[cy].insert_str(cx, &spaces);
                 cx += tab_width();
             }
-            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let text = lines.join("\n").trim().to_string();
                 if text.is_empty() {
                     return Ok(EditorResult::Cancel);
@@ -323,7 +374,7 @@ pub fn journal_editor(
                 }
                 continue;
             }
-            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let text = lines.join("\n").trim().to_string();
                 if text.is_empty() {
                     show_message(terminal, "日记内容为空，无法发送", 1)?;
@@ -337,8 +388,12 @@ pub fn journal_editor(
             }
 
             KeyCode::Char(c) => {
-                lines[cy].insert(cx, c);
-                cx += c.len_utf8();
+                if type_over_selection(&mut lines, &mut cy, &mut cx, sel_anchor, c) {
+                    sel_anchor = None;
+                } else {
+                    lines[cy].insert(cx, c);
+                    cx += c.len_utf8();
+                }
             }
 
             _ => {}
@@ -348,6 +403,449 @@ pub fn journal_editor(
             target_screen_cx = None;
         }
     }
+}
+
+// ── Text selection ──
+
+#[derive(Clone, Copy)]
+struct Range {
+    start: (usize, usize),
+    end: (usize, usize),
+}
+
+fn range_between(a: (usize, usize), b: (usize, usize)) -> Range {
+    if a <= b {
+        Range { start: a, end: b }
+    } else {
+        Range { start: b, end: a }
+    }
+}
+
+fn line_hl_range(r: Range, li: usize) -> Option<(usize, usize)> {
+    let (s0, s1) = r.start;
+    let (e0, e1) = r.end;
+    if li < s0 || li > e0 {
+        return None;
+    }
+    let hs = if li == s0 { s1 } else { 0 };
+    let he = if li == e0 { e1 } else { usize::MAX };
+    Some((hs, he))
+}
+
+fn get_selection_text(lines: &[String], r: Range) -> String {
+    let (s0, s1) = r.start;
+    let (e0, e1) = r.end;
+    if s0 == e0 {
+        return lines[s0][s1..e1].to_string();
+    }
+    let mut out = lines[s0][s1..].to_string();
+    for li in (s0 + 1)..e0 {
+        out.push('\n');
+        out.push_str(&lines[li]);
+    }
+    out.push('\n');
+    out.push_str(&lines[e0][..e1]);
+    out
+}
+
+fn replace_selection(
+    lines: &mut Vec<String>,
+    r: Range,
+    new_text: &str,
+) -> (usize, usize) {
+    let (s0, s1) = r.start;
+    let (e0, e1) = r.end;
+    let first_prefix = lines[s0][..s1].to_string();
+    let last_suffix = lines[e0][e1..].to_string();
+    let new_lines: Vec<&str> = new_text.split('\n').collect();
+    let n = new_lines.len();
+
+    let mut block: Vec<String> = Vec::with_capacity(n);
+    for (i, nl) in new_lines.iter().enumerate() {
+        let mut s = String::new();
+        if i == 0 {
+            s.push_str(&first_prefix);
+        }
+        s.push_str(nl);
+        if i == n - 1 {
+            s.push_str(&last_suffix);
+        }
+        block.push(s);
+    }
+
+    let tail = lines.split_off(e0 + 1);
+    lines.truncate(s0);
+    lines.extend(block);
+    lines.extend(tail);
+
+    let last_li = s0 + n - 1;
+    let cursor_col = lines[last_li].len() - last_suffix.len();
+    (last_li, cursor_col)
+}
+
+fn delete_selection(
+    lines: &mut Vec<String>,
+    cy: &mut usize,
+    cx: &mut usize,
+    anchor: Option<(usize, usize)>,
+) -> bool {
+    let Some(a) = anchor else { return false };
+    let range = range_between(a, (*cy, *cx));
+    if get_selection_text(lines, range).is_empty() {
+        return false;
+    }
+    let (nc, ncx) = replace_selection(lines, range, "");
+    *cy = nc;
+    *cx = ncx;
+    true
+}
+
+fn type_over_selection(
+    lines: &mut Vec<String>,
+    cy: &mut usize,
+    cx: &mut usize,
+    anchor: Option<(usize, usize)>,
+    ch: char,
+) -> bool {
+    let Some(a) = anchor else { return false };
+    let range = range_between(a, (*cy, *cx));
+    if get_selection_text(lines, range).is_empty() {
+        return false;
+    }
+    let (nc, ncx) = replace_selection(lines, range, &ch.to_string());
+    *cy = nc;
+    *cx = ncx;
+    true
+}
+
+fn draw_range_overlay(
+    f: &mut Frame,
+    area: &Rect,
+    row_y: u16,
+    segment: &str,
+    seg_start: usize,
+    range: Option<Range>,
+    li: usize,
+) {
+    let Some(r) = range else { return };
+    let Some((hs, he)) = line_hl_range(r, li) else { return };
+    let hs = hs.max(seg_start);
+    let he = he.min(seg_start + segment.len());
+    if hs >= he {
+        return;
+    }
+    let rel_hs = hs - seg_start;
+    let rel_he = he - seg_start;
+    let x_off = string_width(&segment[..rel_hs]);
+    let hl = &segment[rel_hs..rel_he];
+    let w = string_width(hl);
+    if w == 0 {
+        return;
+    }
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            hl.to_string(),
+            Style::default().add_modifier(Modifier::REVERSED),
+        )),
+        Rect::new(area.x + x_off as u16, row_y, w as u16, 1),
+    );
+}
+
+// ── AI polish ──
+
+fn polish_selection(
+    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<io::Stderr>>,
+    lines: &mut Vec<String>,
+    anchor: Option<(usize, usize)>,
+    cy: &mut usize,
+    cx: &mut usize,
+) -> io::Result<()> {
+    let Some(a) = anchor else {
+        show_message(terminal, "请先用 Shift+方向键选择文本", 1)?;
+        return Ok(());
+    };
+    let range = range_between(a, (*cy, *cx));
+    let text = get_selection_text(lines, range);
+    if text.trim().is_empty() {
+        show_message(terminal, "选中内容为空", 1)?;
+        return Ok(());
+    }
+    let cfg = load_config();
+    if cfg.deepseek_api_key.is_empty() {
+        show_message(terminal, "请先在设置中配置 Deepseek API Key", 2)?;
+        return Ok(());
+    }
+    show_message(terminal, "AI 润色中，请稍候...", 1)?;
+    terminal.flush()?;
+    match polish_text(&cfg.deepseek_api_key, &text) {
+        Some(polished) => {
+            let (nc, ncx) = replace_selection(lines, range, &polished);
+            *cy = nc;
+            *cx = ncx;
+            show_message(terminal, "✓ 润色完成", 1)?;
+        }
+        None => {
+            show_message(terminal, "✗ 润色失败，请检查 API Key 和网络连接", 2)?;
+        }
+    }
+    Ok(())
+}
+
+// ── Find / replace ──
+
+fn find_all_ci(line: &str, needle: &str) -> Vec<(usize, usize)> {
+    let mut res = Vec::new();
+    if needle.is_empty() {
+        return res;
+    }
+    let nl: Vec<char> = needle.chars().collect();
+    let chars: Vec<char> = line.chars().collect();
+    if chars.len() < nl.len() {
+        return res;
+    }
+    let mut byte_at = vec![0usize; chars.len() + 1];
+    let mut acc = 0usize;
+    for (k, c) in chars.iter().enumerate() {
+        byte_at[k] = acc;
+        acc += c.len_utf8();
+    }
+    byte_at[chars.len()] = acc;
+
+    let mut i = 0usize;
+    while i + nl.len() <= chars.len() {
+        let mut ok = true;
+        for (k, nc) in nl.iter().enumerate() {
+            if !chars[i + k].eq_ignore_ascii_case(nc) {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            res.push((byte_at[i], byte_at[i + nl.len()] - byte_at[i]));
+            i += nl.len();
+        } else {
+            i += 1;
+        }
+    }
+    res
+}
+
+fn find_matches(lines: &[String], needle: &str) -> Vec<(usize, usize, usize)> {
+    let mut res = Vec::new();
+    if needle.is_empty() {
+        return res;
+    }
+    for (li, line) in lines.iter().enumerate() {
+        for (st, len) in find_all_ci(line, needle) {
+            res.push((li, st, len));
+        }
+    }
+    res
+}
+
+#[allow(clippy::too_many_arguments)]
+fn find_replace_dialog(
+    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<io::Stderr>>,
+    lines: &mut Vec<String>,
+    cy: &mut usize,
+    cx: &mut usize,
+    prompt_text: &Option<String>,
+    md_enabled: bool,
+    md_theme: &ThemeConfig,
+    sel: Option<Range>,
+) -> io::Result<()> {
+    let mut find_str = String::new();
+    let mut replace_str = String::new();
+    let mut field = 0usize;
+    let mut match_idx = 0usize;
+    let mut last_find = String::new();
+    let mut sel = sel;
+
+    loop {
+        let matches = find_matches(lines, &find_str);
+        let n = matches.len();
+        if find_str != last_find {
+            last_find = find_str.clone();
+            match_idx = if n > 0 {
+                matches
+                    .iter()
+                    .position(|(li, st, _)| *li > *cy || (*li == *cy && *st >= *cx))
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+        } else if n > 0 {
+            match_idx = match_idx % n;
+        } else {
+            match_idx = 0;
+        }
+        let current = matches.get(match_idx).copied();
+        let match_range = current.map(|(li, st, len)| Range {
+            start: (li, st),
+            end: (li, st + len),
+        });
+
+        let term_size = terminal.size()?;
+        let w = term_size.width as usize;
+        let h = term_size.height as usize;
+        let (prompt_lines, prompt_h) = match prompt_text {
+            Some(ref p) => {
+                let wrapped = textwrap::fill(p, w.saturating_sub(6));
+                let plines: Vec<String> = wrapped.lines().map(String::from).collect();
+                let ph = plines.len() + 3;
+                (plines, ph)
+            }
+            None => (Vec::new(), 0),
+        };
+        let text_h = h.saturating_sub(2 + prompt_h);
+
+        *cy = (*cy).min(lines.len().saturating_sub(1));
+        *cx = (*cx).min(lines[*cy].len());
+        let vrows = build_wrap_map(lines, w);
+        let (vi_cursor, scx_cursor) = find_cursor_visual(&vrows, lines, *cy, *cx);
+        let mut scroll_y = 0usize;
+        if vi_cursor < scroll_y {
+            scroll_y = vi_cursor;
+        }
+        if vi_cursor >= scroll_y + text_h {
+            scroll_y = vi_cursor.saturating_sub(text_h) + 1;
+        }
+        scroll_y = scroll_y.min(vrows.len().saturating_sub(text_h).max(0));
+
+        terminal.draw(|f| {
+            render_editor(
+                f,
+                lines,
+                &vrows,
+                &prompt_lines,
+                prompt_h,
+                text_h,
+                scroll_y,
+                vi_cursor,
+                scx_cursor,
+                prompt_text,
+                *cy,
+                md_enabled,
+                md_theme,
+                sel,
+                match_range,
+            );
+            draw_find_overlay(f, &find_str, &replace_str, field, n, match_idx);
+        })?;
+
+        let ev = event::read()?;
+        let Event::Key(key) = ev else { continue };
+        if key.kind == KeyEventKind::Release {
+            continue;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            KeyCode::Esc => return Ok(()),
+            KeyCode::Tab => field = 1 - field,
+            KeyCode::Enter => {
+                if n > 0 {
+                    match_idx = (match_idx + 1) % n;
+                    if let Some((li, st, _)) = matches.get(match_idx).copied() {
+                        *cy = li;
+                        *cx = st;
+                    }
+                }
+            }
+            KeyCode::Up => {
+                if n > 0 {
+                    match_idx = (match_idx + n - 1) % n;
+                    if let Some((li, st, _)) = matches.get(match_idx).copied() {
+                        *cy = li;
+                        *cx = st;
+                    }
+                }
+            }
+            KeyCode::Char('r') if ctrl => {
+                if let Some((li, st, len)) = current {
+                    lines[li].replace_range(st..st + len, &replace_str);
+                    sel = None;
+                }
+            }
+            KeyCode::Char('a') if ctrl => {
+                if !find_str.is_empty() {
+                    for line in lines.iter_mut() {
+                        let mut inds = find_all_ci(line, &find_str);
+                        inds.reverse();
+                        for (st, len) in inds {
+                            line.replace_range(st..st + len, &replace_str);
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            KeyCode::Backspace => {
+                let buf = if field == 0 { &mut find_str } else { &mut replace_str };
+                if let Some(ch) = buf.chars().next_back() {
+                    buf.truncate(buf.len() - ch.len_utf8());
+                }
+            }
+            KeyCode::Char(c) if !ctrl => {
+                let buf = if field == 0 { &mut find_str } else { &mut replace_str };
+                buf.push(c);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn draw_find_overlay(
+    f: &mut Frame,
+    find_str: &str,
+    replace_str: &str,
+    field: usize,
+    total: usize,
+    cur: usize,
+) {
+    let area = f.area();
+    let find_disp = format!("查找: {}", find_str);
+    let repl_disp = format!("替换: {}", replace_str);
+    let count_disp = if total > 0 {
+        format!("{}/{} 匹配", cur + 1, total)
+    } else {
+        "0/0 匹配".to_string()
+    };
+    let help_disp = "[Tab]切换 [Enter]下一处 [↑]上一处 [^R]替换 [^A]全部 [Esc]关闭";
+    let rows = [&find_disp, &repl_disp, &count_disp, help_disp];
+    let max_w = rows.iter().map(|l| string_width(l)).max().unwrap_or(0);
+    let mw = (max_w + 4) as u16;
+    let mh = (rows.len() as u16) + 2;
+    let mx = (area.width.saturating_sub(mw)) / 2;
+    let my = (area.height.saturating_sub(mh)) / 2;
+
+    for i in 0..mh {
+        let pad = " ".repeat(mw as usize);
+        f.render_widget(
+            Paragraph::new(pad).style(theme::overlay_bg()),
+            Rect::new(area.x + mx, my + i, mw, 1),
+        );
+    }
+    for (i, text) in rows.iter().enumerate() {
+        let style = if i == 3 {
+            theme::help_bar()
+        } else {
+            theme::overlay_bg()
+        };
+        f.render_widget(
+            Paragraph::new(format!("  {}", text)).style(style),
+            Rect::new(area.x + mx, my + 1 + i as u16, mw, 1),
+        );
+    }
+    // Highlight the active field value with REVERSED (fbterm-safe).
+    let active = if field == 0 { &find_disp } else { &repl_disp };
+    let active_row = if field == 0 { 0u16 } else { 1u16 };
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            format!("  {}", active),
+            Style::default().add_modifier(Modifier::REVERSED),
+        )),
+        Rect::new(area.x + mx, my + 1 + active_row, mw, 1),
+    );
 }
 
 // ── Style shortcut helpers ──
@@ -430,20 +928,25 @@ fn byte_at_screen_pos(line: &str, seg_start: usize, seg_end: usize, screen_cx: u
     byte_pos.min(seg_end)
 }
 
-// ── Markdown help popup ──
+// ── Keyboard help popup ──
 
-fn show_md_help(
+fn show_key_help(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<io::Stderr>>,
 ) -> io::Result<()> {
     let lines = [
-        "── Markdown 快捷键 ──",
+        "── 移动/编辑 ──",
+        "↑↓←→ Home/End  移动   PgUp/PgDn 翻页",
+        "Shift+方向键    选择文本（输入/退格会删除选区）",
+        "F1-F6           标题 1-6",
         "",
-        "F1-F6      标题 1-6",
-        "^B         加粗 **",
-        "^T         斜体 *",
-        "^D         删除线 ~~",
-        "^U         下划线 <u>",
-        "^H         高亮 ==",
+        "── Markdown 标记 ──",
+        "^B 加粗 **   ^T 斜体 *   ^D 删除线 ~~",
+        "^U 下划线 <u>   ^H 高亮 ==",
+        "",
+        "── AI / 功能 ──",
+        "^O 润色选中文本   ^P 生成提示词",
+        "^R 查找/替换（Tab 切字段，^R 替换，^A 全部替换）",
+        "^F 发送Flomo   ^S 保存   ^Q 放弃",
         "",
         "按任意键关闭",
     ];
@@ -546,6 +1049,8 @@ fn render_editor(
     cy: usize,
     md_enabled: bool,
     md_theme: &ThemeConfig,
+    sel: Option<Range>,
+    match_hl: Option<Range>,
 ) {
     fill_background(f);
     let area = f.area();
@@ -605,10 +1110,13 @@ fn render_editor(
         if seg_w < w {
             padded.push(Span::styled(" ".repeat(w - seg_w), theme::text()));
         }
+        let row_y = area.y + draw_row + i as u16;
         f.render_widget(
             Paragraph::new(Line::from(padded)).style(theme::text()),
-            Rect::new(area.x, area.y + draw_row + i as u16, area.width, 1),
+            Rect::new(area.x, row_y, area.width, 1),
         );
+        draw_range_overlay(f, &area, row_y, segment, seg_start, sel, li);
+        draw_range_overlay(f, &area, row_y, segment, seg_start, match_hl, li);
     }
 
     // Cursor
@@ -621,13 +1129,14 @@ fn render_editor(
     }
 
     // Help bar
-    let mut help_parts = vec![" ^W 完成", "^Q 放弃", "^K 快捷键"];
+    let mut help_parts = vec![" ^S 完成", "^Q 放弃", "^K 快捷键", "^R 替换"];
     let config = load_config();
     if !config.deepseek_api_key.is_empty() {
+        help_parts.push("^O 润色");
         help_parts.push("^P AI提示");
     }
     if !config.flomo_email.is_empty() && !config.flomo_password.is_empty() {
-        help_parts.push("^S 发送Flomo");
+        help_parts.push("^F 发送Flomo");
     }
     let help = format!(" {}", help_parts.join("  "));
     f.render_widget(

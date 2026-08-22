@@ -70,3 +70,47 @@ pub fn generate_ai_prompt(
         Err(_) => None,
     }
 }
+
+pub fn polish_text(api_key: &str, text: &str) -> Option<String> {
+    let system_prompt = "你是一个中文写作润色助手。用户会给你一段文本，请在保持原意、语气和风格不变的前提下润色，\
+        改进措辞、标点、语法和行文连贯性，使其更通顺自然。\
+        只输出润色后的文本本身，不要加任何解释、前缀或引号。";
+
+    let payload = serde_json::json!({
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text}
+        ],
+        "max_tokens": 1024,
+        "temperature": 0.3
+    });
+
+    let client = Client::new();
+    match client
+        .post(DEEPSEEK_API_URL)
+        .json(&payload)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .timeout(std::time::Duration::from_secs(60))
+        .send()
+    {
+        Ok(resp) => {
+            let result: Value = resp.json().ok()?;
+            let content = result["choices"][0]["message"]["content"]
+                .as_str()?
+                .trim()
+                .to_string();
+            // Strip possible quote wrapping
+            let content = content
+                .trim_matches('"')
+                .trim_matches('\'')
+                .trim_matches('\u{201c}')
+                .trim_matches('\u{201d}')
+                .trim_matches('\u{2018}')
+                .trim_matches('\u{2019}')
+                .to_string();
+            Some(content)
+        }
+        Err(_) => None,
+    }
+}
