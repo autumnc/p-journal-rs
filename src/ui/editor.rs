@@ -25,7 +25,19 @@ pub fn journal_editor(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<io::Stderr>>,
     prompt_text: Option<String>,
 ) -> io::Result<EditorResult> {
-    let mut lines: Vec<String> = vec![String::new()];
+    journal_editor_with_initial(terminal, prompt_text, String::new())
+}
+
+pub fn journal_editor_with_initial(
+    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<io::Stderr>>,
+    prompt_text: Option<String>,
+    initial_text: String,
+) -> io::Result<EditorResult> {
+    let mut lines: Vec<String> = if initial_text.is_empty() {
+        vec![String::new()]
+    } else {
+        initial_text.split('\n').map(String::from).collect()
+    };
     let mut cy: usize = 0;
     let mut cx: usize = 0;
     let mut scroll_y: usize = 0;
@@ -197,14 +209,14 @@ pub fn journal_editor(
                         target_screen_cx = Some(scx_cursor);
                     }
                     let tcx = target_screen_cx.unwrap_or(0);
-                    for vi2 in (0..vi_cursor).rev() {
-                        if vrows[vi2].logical_line != vrows[vi_cursor].logical_line || vi2 == 0 {
-                            let vr = &vrows[vi2];
-                            cy = vr.logical_line;
-                            cx = byte_at_screen_pos(&lines[vr.logical_line], vr.start_byte, vr.end_byte, tcx);
-                            break;
-                        }
-                    }
+                    let vr = &vrows[vi_cursor - 1];
+                    cy = vr.logical_line;
+                    cx = byte_at_screen_pos(
+                        &lines[vr.logical_line],
+                        vr.start_byte,
+                        vr.end_byte,
+                        tcx,
+                    );
                 }
                 continue_sticky = true;
             }
@@ -214,15 +226,14 @@ pub fn journal_editor(
                         target_screen_cx = Some(scx_cursor);
                     }
                     let tcx = target_screen_cx.unwrap_or(0);
-                    let current_li = vrows[vi_cursor].logical_line;
-                    for vi2 in (vi_cursor + 1)..vrows.len() {
-                        if vrows[vi2].logical_line != current_li {
-                            let vr = &vrows[vi2];
-                            cy = vr.logical_line;
-                            cx = byte_at_screen_pos(&lines[vr.logical_line], vr.start_byte, vr.end_byte, tcx);
-                            break;
-                        }
-                    }
+                    let vr = &vrows[vi_cursor + 1];
+                    cy = vr.logical_line;
+                    cx = byte_at_screen_pos(
+                        &lines[vr.logical_line],
+                        vr.start_byte,
+                        vr.end_byte,
+                        tcx,
+                    );
                 }
                 continue_sticky = true;
             }
@@ -266,7 +277,12 @@ pub fn journal_editor(
                 if target_vi < vrows.len() {
                     let vr = &vrows[target_vi];
                     cy = vr.logical_line;
-                    cx = vr.start_byte;
+                    cx = byte_at_screen_pos(
+                        &lines[vr.logical_line],
+                        vr.start_byte,
+                        vr.end_byte,
+                        target_screen_cx.unwrap_or(0),
+                    );
                 }
             }
             KeyCode::PageDown => {
@@ -277,7 +293,12 @@ pub fn journal_editor(
                 if target_vi < vrows.len() {
                     let vr = &vrows[target_vi];
                     cy = vr.logical_line;
-                    cx = vr.start_byte;
+                    cx = byte_at_screen_pos(
+                        &lines[vr.logical_line],
+                        vr.start_byte,
+                        vr.end_byte,
+                        target_screen_cx.unwrap_or(0),
+                    );
                 }
             }
 
@@ -1121,10 +1142,11 @@ fn render_editor(
 
     // Cursor
     let screen_row = draw_row + (vi_cursor.saturating_sub(scroll_y)) as u16;
-    if screen_row < area.height.saturating_sub(2) {
+    if screen_row < area.height.saturating_sub(2) && area.width > 0 {
+        let cursor_x = scx_cursor.min(area.width.saturating_sub(1) as usize) as u16;
         f.set_cursor_position(ratatui::layout::Position::new(
-            area.x + scx_cursor as u16,
-            screen_row,
+            area.x + cursor_x,
+            area.y + screen_row,
         ));
     }
 

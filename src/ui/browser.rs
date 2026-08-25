@@ -15,6 +15,7 @@ use std::io;
 
 pub enum BrowserAction {
     ViewFile(String),
+    EditFile(String),
     Back,
 }
 
@@ -69,6 +70,11 @@ pub fn entry_browser(
             KeyCode::Enter => {
                 if let Some(fname) = entries.get(sel) {
                     return Ok(BrowserAction::ViewFile(fname.clone()));
+                }
+            }
+            KeyCode::Char('e') | KeyCode::Char('E') => {
+                if let Some(fname) = entries.get(sel) {
+                    return Ok(BrowserAction::EditFile(fname.clone()));
                 }
             }
             KeyCode::Char('d') | KeyCode::Char('D') => {
@@ -323,7 +329,7 @@ fn draw_browser(
     }
 
     // Help bar
-    let help = " [回车] 阅读  [d] 删除  [/] 搜索  [^F] 发送Flomo  [q] 返回";
+    let help = " [回车] 阅读  [e] 编辑  [d] 删除  [/] 搜索  [^F] 发送Flomo  [q] 返回";
     f.render_widget(
         Paragraph::new(help).style(theme::help_bar()),
         Rect::new(area.x, area.y + area.height - 2, area.width, 1),

@@ -27,6 +27,9 @@ use rand::Rng as _;
 use ratatui::backend::CrosstermBackend;
 use std::io;
 use std::panic;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static KEYBOARD_ENHANCEMENT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 fn main() -> io::Result<()> {
     let supports_ke = matches!(
@@ -35,26 +38,35 @@ fn main() -> io::Result<()> {
     );
 
     let original_hook = panic::take_hook();
-    let ke = supports_ke;
     panic::set_hook(Box::new(move |info| {
-        let _ = restore_terminal(ke);
+        let _ = restore_terminal(KEYBOARD_ENHANCEMENT_ACTIVE.load(Ordering::SeqCst));
         original_hook(info);
     }));
 
+    let result = run_app(supports_ke);
+    if result.is_err() {
+        let _ = restore_terminal(KEYBOARD_ENHANCEMENT_ACTIVE.load(Ordering::SeqCst));
+    }
+    result
+}
+
+fn run_app(supports_ke: bool) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stderr = io::stderr();
 
+    execute!(stderr, EnterAlternateScreen)?;
     if supports_ke {
-        execute!(
+        if execute!(
             stderr,
-            EnterAlternateScreen,
             PushKeyboardEnhancementFlags(
                 KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                     | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
             ),
-        )?;
-    } else {
-        execute!(stderr, EnterAlternateScreen)?;
+        )
+        .is_ok()
+        {
+            KEYBOARD_ENHANCEMENT_ACTIVE.store(true, Ordering::SeqCst);
+        }
     }
 
     let backend = CrosstermBackend::new(io::stderr());
@@ -81,6 +93,9 @@ fn main() -> io::Result<()> {
                 match entry_browser(&mut terminal)? {
                     crate::ui::browser::BrowserAction::ViewFile(filename) => {
                         entry_viewer(&mut terminal, &filename)?;
+                    }
+                    crate::ui::browser::BrowserAction::EditFile(filename) => {
+                        crate::ui::viewer::edit_entry(&mut terminal, &filename)?;
                     }
                     crate::ui::browser::BrowserAction::Back => break,
                 }
@@ -120,17 +135,31 @@ fn main() -> io::Result<()> {
         }
     }
 
-    restore_terminal(supports_ke)?;
+    restore_terminal(KEYBOARD_ENHANCEMENT_ACTIVE.load(Ordering::SeqCst))?;
     println!("再见。");
     Ok(())
 }
 
 fn restore_terminal(supports_ke: bool) -> io::Result<()> {
     let mut stderr = io::stderr();
+    let mut first_err = None;
+
     if supports_ke {
-        execute!(stderr, PopKeyboardEnhancementFlags)?;
+        if let Err(err) = execute!(stderr, PopKeyboardEnhancementFlags) {
+            first_err = Some(err);
+        }
+        KEYBOARD_ENHANCEMENT_ACTIVE.store(false, Ordering::SeqCst);
     }
-    execute!(stderr, LeaveAlternateScreen)?;
-    disable_raw_mode()?;
-    Ok(())
+    if let Err(err) = execute!(stderr, LeaveAlternateScreen) {
+        first_err.get_or_insert(err);
+    }
+    if let Err(err) = disable_raw_mode() {
+        first_err.get_or_insert(err);
+    }
+
+    if let Some(err) = first_err {
+        Err(err)
+    } else {
+        Ok(())
+    }
 }

@@ -24,6 +24,18 @@ pub fn string_width(s: &str) -> usize {
     s.chars().map(char_width).sum()
 }
 
+fn byte_at_char_pos(chars: &[(usize, char)], pos: usize) -> usize {
+    if pos < chars.len() {
+        chars[pos].0
+    } else {
+        chars.last().map(|(i, ch)| i + ch.len_utf8()).unwrap_or(0)
+    }
+}
+
+fn is_cjk_line_break_char(ch: char) -> bool {
+    char_width(ch) == 2
+}
+
 /// Word wrap a single line, returning (start, end) byte-index segments.
 /// Supports CJK character widths for display-width calculations.
 pub fn wrap_line(line: &str, display_width: usize) -> Vec<(usize, usize)> {
@@ -35,65 +47,42 @@ pub fn wrap_line(line: &str, display_width: usize) -> Vec<(usize, usize)> {
     }
 
     let chars: Vec<(usize, char)> = line.char_indices().collect();
-    let len = chars.len();
     let mut segments = Vec::new();
-    let mut pos = 0;
-    let mut current_width = 0;
-    let mut seg_start = 0;
+    let mut seg_start = 0usize;
 
-    while pos < len {
-        let ch = chars[pos].1;
-        let cw = char_width(ch);
+    while seg_start < chars.len() {
+        let mut pos = seg_start;
+        let mut current_width = 0usize;
+        let mut last_break: Option<(usize, usize)> = None;
 
-        if current_width + cw > display_width {
-            if ch == ' ' {
-                segments.push((chars[seg_start].0, chars[pos].0));
-                pos += 1;
-                seg_start = pos;
-                current_width = 0;
-            } else {
-                let mut has_space = false;
-                let mut break_pos = pos;
-                for i in seg_start..pos {
-                    if chars[i].1 == ' ' {
-                        has_space = true;
-                        break_pos = i;
-                    }
-                }
+        while pos < chars.len() {
+            let ch = chars[pos].1;
+            let cw = char_width(ch);
+            if current_width > 0 && current_width + cw > display_width {
+                break;
+            }
 
-                if has_space && break_pos > seg_start {
-                    segments.push((chars[seg_start].0, chars[break_pos].0));
-                    pos = break_pos + 1;
-                    seg_start = pos;
-                    current_width = if pos < len {
-                        let s: String = chars[seg_start..=pos].iter().map(|(_, c)| c).collect();
-                        string_width(&s)
-                    } else {
-                        0
-                    };
-                } else {
-                    segments.push((chars[seg_start].0, chars[pos].0));
-                    seg_start = pos;
-                    current_width = cw;
-                }
-            }
-            if seg_start == pos {
-                pos += 1;
-            }
-            if seg_start < pos {
-                continue;
-            }
-        } else {
             current_width += cw;
             pos += 1;
-        }
-    }
 
-    if seg_start < len {
-        let end = chars.last().map(|(i, c)| i + c.len_utf8()).unwrap_or(0);
-        segments.push((chars[seg_start].0, end));
-    } else if seg_start == len && segments.is_empty() {
-        segments.push((0, 0));
+            if ch == ' ' {
+                last_break = Some((pos, pos));
+            } else if is_cjk_line_break_char(ch) {
+                last_break = Some((pos, pos));
+            }
+        }
+
+        if pos >= chars.len() {
+            segments.push((chars[seg_start].0, byte_at_char_pos(&chars, chars.len())));
+            break;
+        }
+
+        let (break_end, next_start) = last_break
+            .filter(|(end, next)| *end > seg_start && *next > seg_start)
+            .unwrap_or((pos, pos));
+
+        segments.push((chars[seg_start].0, byte_at_char_pos(&chars, break_end)));
+        seg_start = next_start;
     }
 
     if segments.is_empty() {
@@ -163,4 +152,33 @@ pub fn word_count(lines: &[String]) -> usize {
         total += chinese_chars + english_words;
     }
     total
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{string_width, wrap_line};
+
+    fn wrapped_text(line: &str, width: usize) -> Vec<&str> {
+        wrap_line(line, width)
+            .into_iter()
+            .map(|(start, end)| &line[start..end])
+            .collect()
+    }
+
+    #[test]
+    fn wraps_between_cjk_chars() {
+        assert_eq!(wrapped_text("中文字符", 4), vec!["中文", "字符"]);
+    }
+
+    #[test]
+    fn cjk_breaks_after_space_in_mixed_text() {
+        assert_eq!(wrapped_text("abc 中文def", 6), vec!["abc 中", "文def"]);
+    }
+
+    #[test]
+    fn wrapped_segments_stay_within_width_when_possible() {
+        for segment in wrapped_text("hello 中文 world", 8) {
+            assert!(string_width(segment) <= 8);
+        }
+    }
 }

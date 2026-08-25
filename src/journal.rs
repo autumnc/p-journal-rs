@@ -120,6 +120,10 @@ pub fn save_entry(text: &str) -> io::Result<String> {
     Ok(filepath.to_string_lossy().to_string())
 }
 
+pub fn update_entry(filename: &str, text: &str) -> io::Result<()> {
+    fs::write(config::journal_dir().join(filename), text)
+}
+
 pub fn extract_body_from_entry(content: &str) -> String {
     if content.is_empty() {
         return String::new();
